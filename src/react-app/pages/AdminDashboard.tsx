@@ -459,6 +459,12 @@ function SyncPage() {
     await fetch("/api/admin/sync", { method: "POST" }).catch(() => {});
   }
 
+  async function cancelSync() {
+    if (!confirm("Mark all running syncs as cancelled? This won't actually stop in-flight Veracross requests, but will let you start a new sync.")) return;
+    await fetch("/api/admin/sync/cancel", { method: "POST" }).catch(() => {});
+    loadLogs();
+  }
+
   function fmt(ms: number | null) {
     if (ms == null) return "";
     return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
@@ -473,30 +479,40 @@ function SyncPage() {
             Syncs students, teachers, classes, and enrollments. Runs are logged below.
           </p>
         </div>
-        <button
-          onClick={runSync}
-          disabled={syncing}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
-            syncing ? "bg-gray-300 cursor-not-allowed" : "bg-crimson hover:bg-crimson-dark shadow-sm"
-          }`}
-        >
-          {syncing ? (
-            <>
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              Syncing…
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Run Veracross Sync
-            </>
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <button
+              onClick={cancelSync}
+              className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors"
+            >
+              Cancel
+            </button>
           )}
-        </button>
+          <button
+            onClick={runSync}
+            disabled={syncing}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
+              syncing ? "bg-gray-300 cursor-not-allowed" : "bg-crimson hover:bg-crimson-dark shadow-sm"
+            }`}
+          >
+            {syncing ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Syncing…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Run Veracross Sync
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

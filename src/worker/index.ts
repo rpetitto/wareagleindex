@@ -731,9 +731,9 @@ app.post("/api/admin/sync", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
-  // Expire any running entries older than 10 minutes (they timed out)
+  // Expire any running entries older than 5 minutes (they timed out)
   await db
-    .prepare(`UPDATE sync_logs SET status='error', error_message='Timed out' WHERE status='running' AND ran_at < datetime('now', '-10 minutes')`)
+    .prepare(`UPDATE sync_logs SET status='error', error_message='Timed out' WHERE status='running' AND ran_at < datetime('now', '-5 minutes')`)
     .run();
 
   // Prevent concurrent syncs
@@ -769,6 +769,15 @@ app.post("/api/admin/sync", async (c) => {
       })
   );
 
+  return c.json({ ok: true });
+});
+
+app.post("/api/admin/sync/cancel", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  await db
+    .prepare(`UPDATE sync_logs SET status='error', error_message='Cancelled by admin' WHERE status='running'`)
+    .run();
   return c.json({ ok: true });
 });
 
