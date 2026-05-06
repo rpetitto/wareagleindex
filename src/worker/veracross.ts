@@ -68,35 +68,21 @@ async function getVCToken(): Promise<string> {
 }
 
 async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
-  const PAGE_SIZE = 100;
-  const headers = { Authorization: `Bearer ${token}` };
-  const separator = path.includes("?") ? "&" : "?";
+  const PAGE_SIZE = 1000;
+  const all: T[] = [];
+  let page = 1;
 
-  // Try first page with pagination; fall back if endpoint rejects params (400)
-  const firstUrl = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=1`;
-  const firstRes = await fetch(firstUrl, { headers });
-
-  if (firstRes.status === 400) {
-    const res = await fetch(`${base}/${path}`, { headers });
+  while (true) {
+    const res = await fetch(`${base}/${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Page-Size": String(PAGE_SIZE),
+        "X-Page-Number": String(page),
+      },
+    });
     if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
     const json = (await res.json()) as { data?: T[]; error?: string };
     if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
-    return json.data ?? [];
-  }
-
-  if (!firstRes.ok) throw new Error(`Veracross API ${firstRes.status}: /${path}`);
-  const firstJson = (await firstRes.json()) as { data?: T[]; error?: string };
-  if (firstJson.error) throw new Error(`Veracross /${path}: ${firstJson.error}`);
-
-  const all: T[] = [...(firstJson.data ?? [])];
-  if (all.length < PAGE_SIZE) return all;
-
-  let page = 2;
-  while (true) {
-    const url = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=${page}`;
-    const res = await fetch(url, { headers });
-    if (!res.ok || res.status === 400) break;
-    const json = (await res.json()) as { data?: T[]; error?: string };
     const records = json.data ?? [];
     all.push(...records);
     if (records.length < PAGE_SIZE) break;
