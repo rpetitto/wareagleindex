@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, Link, useLocation, Navigate } from "react-router-dom";
+import { Routes, Route, Link, useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
@@ -385,7 +385,13 @@ function UsersPage() {
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-gray-900 text-sm truncate">{u.name}</p>
+              {u.role === "student" ? (
+                <Link to={`/admin/students/${u.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+                  {u.name}
+                </Link>
+              ) : (
+                <p className="font-medium text-gray-900 text-sm truncate">{u.name}</p>
+              )}
               <p className="text-xs text-gray-400 truncate">{u.email}</p>
             </div>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${ROLE_COLORS[u.role] ?? "bg-gray-100"}`}>
@@ -570,6 +576,190 @@ function SyncPage() {
   );
 }
 
+// ─── Student Profile ─────────────────────────────────────────────────────────
+
+interface StudentResponse {
+  type: string;
+  window_id: string;
+  window_name: string;
+  opens_at: string;
+  submitted_at: string;
+  // EI
+  challenge?: number;
+  love?: number;
+  // MI
+  connection?: number;
+  contribution?: number;
+  // Dimensions
+  behavioral_effort?: number;
+  behavioral_focus?: number;
+  behavioral_respect?: number;
+  cognitive_clarity?: number;
+  cognitive_expectations?: number;
+  cognitive_feedback?: number;
+  cognitive_challenge?: number;
+  emotional_known?: number;
+  emotional_cared?: number;
+  emotional_motivated?: number;
+  emotional_enjoyment?: number;
+  instructional_activities?: number;
+  instructional_collaboration?: number;
+  instructional_assignments?: number;
+}
+
+interface StudentClass {
+  id: string;
+  name: string;
+  grade_level: string | null;
+  primary_teacher_name: string | null;
+  responses: StudentResponse[];
+}
+
+interface StudentDetail {
+  student: { id: string; name: string; email: string; picture: string | null; veracross_id: string | null };
+  classes: StudentClass[];
+}
+
+const TYPE_BADGE_PROFILE: Record<string, string> = {
+  engagement_index: "bg-green-100 text-green-700",
+  mattering_index: "bg-blue-100 text-blue-700",
+  dimensions: "bg-purple-100 text-purple-700",
+};
+const TYPE_SHORT_PROFILE: Record<string, string> = {
+  engagement_index: "EI",
+  mattering_index: "MI",
+  dimensions: "ED",
+};
+
+function dimAvg(r: StudentResponse, keys: string[]) {
+  const vals = keys.map((k) => r[k as keyof StudentResponse] as number | undefined).filter((v) => v != null) as number[];
+  if (!vals.length) return null;
+  return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+}
+
+function ResponseSummary({ r }: { r: StudentResponse }) {
+  if (r.type === "engagement_index") {
+    return (
+      <span className="text-xs text-gray-500">
+        Challenge: <strong>{r.challenge}</strong>/10 · Love: <strong>{r.love}</strong>/10
+      </span>
+    );
+  }
+  if (r.type === "mattering_index") {
+    return (
+      <span className="text-xs text-gray-500">
+        Connection: <strong>{r.connection}</strong>/5 · Contribution: <strong>{r.contribution}</strong>/5
+      </span>
+    );
+  }
+  const beh = dimAvg(r, ["behavioral_effort", "behavioral_focus", "behavioral_respect"]);
+  const cog = dimAvg(r, ["cognitive_clarity", "cognitive_expectations", "cognitive_feedback", "cognitive_challenge"]);
+  const emo = dimAvg(r, ["emotional_known", "emotional_cared", "emotional_motivated", "emotional_enjoyment"]);
+  const ins = dimAvg(r, ["instructional_activities", "instructional_collaboration", "instructional_assignments"]);
+  return (
+    <span className="text-xs text-gray-500">
+      B: <strong>{beh}</strong> · C: <strong>{cog}</strong> · E: <strong>{emo}</strong> · I: <strong>{ins}</strong>
+    </span>
+  );
+}
+
+function StudentProfilePage() {
+  const { userId } = useParams<{ userId: string }>();
+  const navigate = useNavigate();
+  const [data, setData] = useState<StudentDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/admin/students/${userId}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d as StudentDetail); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [userId]);
+
+  if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
+  if (!data) return <div className="text-center text-gray-400 py-12">Student not found.</div>;
+
+  const { student, classes } = data;
+
+  return (
+    <div>
+      <button
+        onClick={() => navigate("/admin/users")}
+        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Back to Users
+      </button>
+
+      {/* Student header */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6 flex items-center gap-4">
+        {student.picture ? (
+          <img src={student.picture} alt={student.name} className="w-14 h-14 rounded-full shrink-0" />
+        ) : (
+          <div className="w-14 h-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-500 shrink-0">
+            {student.name[0]}
+          </div>
+        )}
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">{student.name}</h2>
+          <p className="text-sm text-gray-400">{student.email}</p>
+          {student.veracross_id && (
+            <p className="text-xs text-gray-300 mt-0.5">VC #{student.veracross_id}</p>
+          )}
+        </div>
+        <div className="ml-auto text-right">
+          <div className="text-2xl font-bold text-crimson">{classes.length}</div>
+          <div className="text-xs text-gray-400">enrolled classes</div>
+        </div>
+      </div>
+
+      {/* Classes */}
+      {classes.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
+          No enrolled classes found.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {classes.map((cls) => (
+            <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-50">
+                <h3 className="font-semibold text-gray-900">{cls.name}</h3>
+                <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                  {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
+                  {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                </div>
+              </div>
+
+              {cls.responses.length === 0 ? (
+                <div className="px-5 py-3 text-xs text-gray-400">No survey responses yet.</div>
+              ) : (
+                <div className="divide-y divide-gray-50">
+                  {cls.responses.map((r, i) => (
+                    <div key={`${r.window_id}-${r.type}-${i}`} className="px-5 py-3 flex items-center gap-3">
+                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE_PROFILE[r.type] ?? "bg-gray-100 text-gray-600"}`}>
+                        {TYPE_SHORT_PROFILE[r.type] ?? "?"}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-700 truncate">{r.window_name}</p>
+                        <ResponseSummary r={r} />
+                      </div>
+                      <span className="text-xs text-gray-300 shrink-0">
+                        {new Date(r.submitted_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -578,7 +768,7 @@ export default function AdminDashboard() {
   const tabs = [
     { to: "/admin", label: "Overview", exact: true },
     { to: "/admin/surveys", label: "Surveys" },
-    { to: "/admin/users", label: "Users" },
+    { to: "/admin/users", label: "Users", also: "/admin/students" },
     { to: "/admin/sync", label: "Veracross Sync" },
   ];
 
@@ -591,7 +781,8 @@ export default function AdminDashboard() {
           {tabs.map((t) => {
             const active = t.exact
               ? loc.pathname === t.to
-              : loc.pathname.startsWith(t.to) && t.to !== "/admin";
+              : (loc.pathname.startsWith(t.to) && t.to !== "/admin") ||
+                (t.also ? loc.pathname.startsWith(t.also) : false);
             const isAdmin = loc.pathname === "/admin" && t.exact;
             return (
               <Link
@@ -614,6 +805,7 @@ export default function AdminDashboard() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/surveys" element={<SurveysPage />} />
           <Route path="/users" element={<UsersPage />} />
+          <Route path="/students/:userId" element={<StudentProfilePage />} />
           <Route path="/sync" element={<SyncPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>

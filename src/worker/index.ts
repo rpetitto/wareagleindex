@@ -605,6 +605,90 @@ app.patch("/api/admin/users/:id/role", async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/api/admin/students/:userId", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { userId } = c.req.param();
+
+  const student = await db
+    .prepare(`SELECT id, name, email, picture, veracross_id, role FROM users WHERE id = ?1`)
+    .bind(userId)
+    .first<{ id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string }>();
+  if (!student) return c.json({ error: "Not found" }, 404);
+
+  const classRows = await db
+    .prepare(
+      `SELECT c.id, c.name, c.grade_level, c.primary_teacher_name
+       FROM enrollments e JOIN classes c ON c.id = e.class_id
+       WHERE e.student_id = ?1 ORDER BY c.name`
+    )
+    .bind(userId)
+    .all<{ id: string; name: string; grade_level: string | null; primary_teacher_name: string | null }>();
+
+  const [eiRows, miRows, dimRows] = await Promise.all([
+    db.prepare(
+      `SELECT er.class_id, er.challenge, er.love, er.submitted_at,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.closes_at
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       WHERE er.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(userId).all<{ class_id: string; challenge: number; love: number; submitted_at: string; window_id: string; window_name: string; opens_at: string; closes_at: string }>(),
+
+    db.prepare(
+      `SELECT mr.class_id, mr.connection, mr.contribution, mr.submitted_at,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.closes_at
+       FROM mattering_responses mr
+       JOIN survey_windows sw ON sw.id = mr.survey_window_id
+       WHERE mr.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(userId).all<{ class_id: string; connection: number; contribution: number; submitted_at: string; window_id: string; window_name: string; opens_at: string; closes_at: string }>(),
+
+    db.prepare(
+      `SELECT dr.class_id, dr.submitted_at,
+              dr.behavioral_effort, dr.behavioral_focus, dr.behavioral_respect,
+              dr.cognitive_clarity, dr.cognitive_expectations, dr.cognitive_feedback, dr.cognitive_challenge,
+              dr.emotional_known, dr.emotional_cared, dr.emotional_motivated, dr.emotional_enjoyment,
+              dr.instructional_activities, dr.instructional_collaboration, dr.instructional_assignments,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.closes_at
+       FROM dimension_responses dr
+       JOIN survey_windows sw ON sw.id = dr.survey_window_id
+       WHERE dr.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(userId).all(),
+  ]);
+
+  // Group responses by class_id
+  type Response = Record<string, unknown> & { type: string };
+  const responsesByClass = new Map<string, Response[]>();
+
+  for (const r of eiRows.results ?? []) {
+    const arr = responsesByClass.get(r.class_id) ?? [];
+    arr.push({ ...r, type: "engagement_index" });
+    responsesByClass.set(r.class_id, arr);
+  }
+  for (const r of miRows.results ?? []) {
+    const arr = responsesByClass.get(r.class_id) ?? [];
+    arr.push({ ...r, type: "mattering_index" });
+    responsesByClass.set(r.class_id, arr);
+  }
+  for (const r of (dimRows.results ?? []) as (Record<string, unknown> & { class_id: string })[]) {
+    const arr = responsesByClass.get(r.class_id) ?? [];
+    arr.push({ ...r, type: "dimensions" });
+    responsesByClass.set(r.class_id, arr);
+  }
+
+  // Sort each class's responses newest first
+  for (const arr of responsesByClass.values()) {
+    arr.sort((a, b) => String(b.opens_at ?? "").localeCompare(String(a.opens_at ?? "")));
+  }
+
+  const classes = (classRows.results ?? []).map((cls) => ({
+    ...cls,
+    responses: responsesByClass.get(cls.id) ?? [],
+  }));
+
+  return c.json({ student, classes });
+});
+
 app.get("/api/admin/classes", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
@@ -627,6 +711,11 @@ app.get("/api/admin/classes", async (c) => {
 app.post("/api/admin/sync", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  // Expire any running entries older than 10 minutes (they timed out)
+  await db
+    .prepare(`UPDATE sync_logs SET status='error', error_message='Timed out' WHERE status='running' AND ran_at < datetime('now', '-10 minutes')`)
+    .run();
 
   // Prevent concurrent syncs
   const alreadyRunning = await db
