@@ -605,18 +605,37 @@ app.patch("/api/admin/users/:id/role", async (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/api/admin/students/:userId", async (c) => {
+app.get("/api/admin/users/:userId/profile", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
   const { userId } = c.req.param();
 
-  const student = await db
-    .prepare(`SELECT id, name, email, picture, veracross_id, role FROM users WHERE id = ?1`)
+  const profile = await db
+    .prepare(`SELECT id, name, email, picture, veracross_id, role, created_at FROM users WHERE id = ?1`)
     .bind(userId)
-    .first<{ id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string }>();
-  if (!student) return c.json({ error: "Not found" }, 404);
+    .first<{ id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string; created_at: string }>();
+  if (!profile) return c.json({ error: "Not found" }, 404);
 
+  // Teachers/admins: return classes they teach with student counts
+  if (profile.role === "teacher" || profile.role === "admin") {
+    const taught = await db
+      .prepare(
+        `SELECT c.id, c.name, c.grade_level, c.primary_teacher_name,
+                COUNT(DISTINCT e.student_id) as student_count
+         FROM teacher_classes tc
+         JOIN classes c ON c.id = tc.class_id
+         LEFT JOIN enrollments e ON e.class_id = c.id
+         WHERE tc.teacher_id = ?1
+         GROUP BY c.id ORDER BY c.name`
+      )
+      .bind(userId)
+      .all<{ id: string; name: string; grade_level: string | null; primary_teacher_name: string | null; student_count: number }>();
+
+    return c.json({ profile, teaches: taught.results ?? [], classes: [] });
+  }
+
+  // Students: return enrolled classes with full survey response history
   const classRows = await db
     .prepare(
       `SELECT c.id, c.name, c.grade_level, c.primary_teacher_name
@@ -686,7 +705,7 @@ app.get("/api/admin/students/:userId", async (c) => {
     responses: responsesByClass.get(cls.id) ?? [],
   }));
 
-  return c.json({ student, classes });
+  return c.json({ profile, teaches: [], classes });
 });
 
 app.get("/api/admin/classes", async (c) => {

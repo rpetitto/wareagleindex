@@ -385,13 +385,9 @@ function UsersPage() {
               </div>
             )}
             <div className="flex-1 min-w-0">
-              {u.role === "student" ? (
-                <Link to={`/admin/students/${u.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
-                  {u.name}
-                </Link>
-              ) : (
-                <p className="font-medium text-gray-900 text-sm truncate">{u.name}</p>
-              )}
+              <Link to={`/admin/users/${u.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+                {u.name}
+              </Link>
               <p className="text-xs text-gray-400 truncate">{u.email}</p>
             </div>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${ROLE_COLORS[u.role] ?? "bg-gray-100"}`}>
@@ -576,9 +572,9 @@ function SyncPage() {
   );
 }
 
-// ─── Student Profile ─────────────────────────────────────────────────────────
+// ─── User Profile ────────────────────────────────────────────────────────────
 
-interface StudentResponse {
+interface UserResponse {
   type: string;
   window_id: string;
   window_name: string;
@@ -607,17 +603,26 @@ interface StudentResponse {
   instructional_assignments?: number;
 }
 
-interface StudentClass {
+interface UserClass {
   id: string;
   name: string;
   grade_level: string | null;
   primary_teacher_name: string | null;
-  responses: StudentResponse[];
+  responses: UserResponse[];
 }
 
-interface StudentDetail {
-  student: { id: string; name: string; email: string; picture: string | null; veracross_id: string | null };
-  classes: StudentClass[];
+interface TaughtClass {
+  id: string;
+  name: string;
+  grade_level: string | null;
+  primary_teacher_name: string | null;
+  student_count: number;
+}
+
+interface UserProfileData {
+  profile: { id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string; created_at: string };
+  classes: UserClass[];
+  teaches: TaughtClass[];
 }
 
 const TYPE_BADGE_PROFILE: Record<string, string> = {
@@ -631,13 +636,19 @@ const TYPE_SHORT_PROFILE: Record<string, string> = {
   dimensions: "ED",
 };
 
-function dimAvg(r: StudentResponse, keys: string[]) {
-  const vals = keys.map((k) => r[k as keyof StudentResponse] as number | undefined).filter((v) => v != null) as number[];
+const ROLE_PROFILE_COLORS: Record<string, string> = {
+  admin: "bg-crimson/10 text-crimson",
+  teacher: "bg-blue-100 text-blue-700",
+  student: "bg-gray-100 text-gray-600",
+};
+
+function dimAvg(r: UserResponse, keys: string[]) {
+  const vals = keys.map((k) => r[k as keyof UserResponse] as number | undefined).filter((v) => v != null) as number[];
   if (!vals.length) return null;
   return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
 }
 
-function ResponseSummary({ r }: { r: StudentResponse }) {
+function ResponseSummary({ r }: { r: UserResponse }) {
   if (r.type === "engagement_index") {
     return (
       <span className="text-xs text-gray-500">
@@ -663,23 +674,25 @@ function ResponseSummary({ r }: { r: StudentResponse }) {
   );
 }
 
-function StudentProfilePage() {
+function UserProfilePage() {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
-  const [data, setData] = useState<StudentDetail | null>(null);
+  const [data, setData] = useState<UserProfileData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/admin/students/${userId}`)
+    setLoading(true);
+    fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
-      .then((d) => { setData(d as StudentDetail); setLoading(false); })
+      .then((d) => { setData(d as UserProfileData); setLoading(false); })
       .catch(() => setLoading(false));
   }, [userId]);
 
   if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
-  if (!data) return <div className="text-center text-gray-400 py-12">Student not found.</div>;
+  if (!data?.profile) return <div className="text-center text-gray-400 py-12">User not found.</div>;
 
-  const { student, classes } = data;
+  const { profile, classes, teaches } = data;
+  const isTeacher = profile.role === "teacher" || profile.role === "admin";
 
   return (
     <div>
@@ -693,68 +706,114 @@ function StudentProfilePage() {
         Back to Users
       </button>
 
-      {/* Student header */}
+      {/* Header */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6 flex items-center gap-4">
-        {student.picture ? (
-          <img src={student.picture} alt={student.name} className="w-14 h-14 rounded-full shrink-0" />
+        {profile.picture ? (
+          <img src={profile.picture} alt={profile.name} className="w-14 h-14 rounded-full shrink-0" />
         ) : (
           <div className="w-14 h-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-500 shrink-0">
-            {student.name[0]}
+            {profile.name[0]}
           </div>
         )}
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">{student.name}</h2>
-          <p className="text-sm text-gray-400">{student.email}</p>
-          {student.veracross_id && (
-            <p className="text-xs text-gray-300 mt-0.5">VC #{student.veracross_id}</p>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold text-gray-900">{profile.name}</h2>
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ROLE_PROFILE_COLORS[profile.role] ?? "bg-gray-100"}`}>
+              {profile.role}
+            </span>
+          </div>
+          <p className="text-sm text-gray-400">{profile.email}</p>
+          {profile.veracross_id && (
+            <p className="text-xs text-gray-300 mt-0.5">VC #{profile.veracross_id}</p>
           )}
         </div>
-        <div className="ml-auto text-right">
-          <div className="text-2xl font-bold text-crimson">{classes.length}</div>
-          <div className="text-xs text-gray-400">enrolled classes</div>
+        <div className="text-right">
+          <div className="text-2xl font-bold text-crimson">
+            {isTeacher ? teaches.length : classes.length}
+          </div>
+          <div className="text-xs text-gray-400">
+            {isTeacher ? "classes taught" : "enrolled classes"}
+          </div>
         </div>
       </div>
 
-      {/* Classes */}
-      {classes.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
-          No enrolled classes found.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {classes.map((cls) => (
-            <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-50">
-                <h3 className="font-semibold text-gray-900">{cls.name}</h3>
-                <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
-                  {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
-                  {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
-                </div>
-              </div>
-
-              {cls.responses.length === 0 ? (
-                <div className="px-5 py-3 text-xs text-gray-400">No survey responses yet.</div>
-              ) : (
-                <div className="divide-y divide-gray-50">
-                  {cls.responses.map((r, i) => (
-                    <div key={`${r.window_id}-${r.type}-${i}`} className="px-5 py-3 flex items-center gap-3">
-                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE_PROFILE[r.type] ?? "bg-gray-100 text-gray-600"}`}>
-                        {TYPE_SHORT_PROFILE[r.type] ?? "?"}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-700 truncate">{r.window_name}</p>
-                        <ResponseSummary r={r} />
-                      </div>
-                      <span className="text-xs text-gray-300 shrink-0">
-                        {new Date(r.submitted_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
+      {/* Teacher view: classes they teach */}
+      {isTeacher && (
+        teaches.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
+            {profile.role === "admin"
+              ? "Administrator account. No classes assigned."
+              : "No classes assigned. Classes are linked from Veracross during sync."}
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-50">
+              <h3 className="font-semibold text-gray-800 text-sm">Classes Taught</h3>
             </div>
-          ))}
-        </div>
+            <div className="divide-y divide-gray-50">
+              {teaches.map((cls) => (
+                <div key={cls.id} className="px-5 py-3 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-900 text-sm truncate">{cls.name}</p>
+                    {cls.grade_level && (
+                      <p className="text-xs text-gray-400">Grade {cls.grade_level}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 text-xs text-gray-500 shrink-0">
+                    <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    {cls.student_count} students
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      )}
+
+      {/* Student view: classes + responses */}
+      {!isTeacher && (
+        classes.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
+            No enrolled classes found.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {classes.map((cls) => (
+              <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-50">
+                  <h3 className="font-semibold text-gray-900">{cls.name}</h3>
+                  <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                    {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
+                    {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                  </div>
+                </div>
+
+                {cls.responses.length === 0 ? (
+                  <div className="px-5 py-3 text-xs text-gray-400">No survey responses yet.</div>
+                ) : (
+                  <div className="divide-y divide-gray-50">
+                    {cls.responses.map((r, i) => (
+                      <div key={`${r.window_id}-${r.type}-${i}`} className="px-5 py-3 flex items-center gap-3">
+                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE_PROFILE[r.type] ?? "bg-gray-100 text-gray-600"}`}>
+                          {TYPE_SHORT_PROFILE[r.type] ?? "?"}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-700 truncate">{r.window_name}</p>
+                          <ResponseSummary r={r} />
+                        </div>
+                        <span className="text-xs text-gray-300 shrink-0">
+                          {new Date(r.submitted_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )
       )}
     </div>
   );
@@ -768,7 +827,7 @@ export default function AdminDashboard() {
   const tabs = [
     { to: "/admin", label: "Overview", exact: true },
     { to: "/admin/surveys", label: "Surveys" },
-    { to: "/admin/users", label: "Users", also: "/admin/students" },
+    { to: "/admin/users", label: "Users" },
     { to: "/admin/sync", label: "Veracross Sync" },
   ];
 
@@ -781,8 +840,7 @@ export default function AdminDashboard() {
           {tabs.map((t) => {
             const active = t.exact
               ? loc.pathname === t.to
-              : (loc.pathname.startsWith(t.to) && t.to !== "/admin") ||
-                (t.also ? loc.pathname.startsWith(t.also) : false);
+              : loc.pathname.startsWith(t.to) && t.to !== "/admin";
             const isAdmin = loc.pathname === "/admin" && t.exact;
             return (
               <Link
@@ -805,7 +863,7 @@ export default function AdminDashboard() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/surveys" element={<SurveysPage />} />
           <Route path="/users" element={<UsersPage />} />
-          <Route path="/students/:userId" element={<StudentProfilePage />} />
+          <Route path="/users/:userId" element={<UserProfilePage />} />
           <Route path="/sync" element={<SyncPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
