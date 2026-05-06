@@ -2,6 +2,119 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import NavBar from "../components/NavBar";
 
+interface AllClass {
+  id: string;
+  name: string;
+  subject: string | null;
+  grade_level: string | null;
+  school_year: string | null;
+  primary_teacher_name: string | null;
+  primary_teacher_vc_id: string | null;
+  is_mine: number;
+  student_count: number;
+}
+
+function ClaimClassesPanel({ onDone }: { onDone: () => void }) {
+  const [all, setAll] = useState<AllClass[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  function load() {
+    setLoading(true);
+    fetch("/api/teacher/all-classes")
+      .then((r) => r.json())
+      .then((d) => { setAll(d as AllClass[]); setLoading(false); })
+      .catch(() => setLoading(false));
+  }
+
+  useEffect(load, []);
+
+  async function toggle(cls: AllClass) {
+    setToggling(cls.id);
+    await fetch(`/api/teacher/claim-class/${cls.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ claim: !cls.is_mine }),
+    });
+    load();
+    setToggling(null);
+  }
+
+  const filtered = all.filter(
+    (c) =>
+      !search ||
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      (c.primary_teacher_name ?? "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  const mine = filtered.filter((c) => c.is_mine);
+  const others = filtered.filter((c) => !c.is_mine);
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm mb-8">
+      <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
+        <div>
+          <h2 className="font-semibold text-gray-900">Claim Your Classes</h2>
+          <p className="text-sm text-gray-400 mt-0.5">
+            Select the classes you teach. Teachers aren't automatically linked from Veracross — claim yours here.
+          </p>
+        </div>
+        {mine.length > 0 && (
+          <button
+            onClick={onDone}
+            className="text-sm bg-crimson text-white px-4 py-2 rounded-xl font-medium hover:bg-crimson-dark transition-colors"
+          >
+            Done ({mine.length} claimed)
+          </button>
+        )}
+      </div>
+
+      <div className="px-6 py-3 border-b border-gray-50">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search classes or teacher name…"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crimson/30"
+        />
+      </div>
+
+      {loading ? (
+        <div className="p-8 text-center text-gray-400 text-sm">Loading…</div>
+      ) : (
+        <div className="max-h-96 overflow-y-auto divide-y divide-gray-50">
+          {filtered.length === 0 && (
+            <div className="p-8 text-center text-gray-400 text-sm">No classes found.</div>
+          )}
+          {[...mine, ...others].map((cls) => (
+            <div key={cls.id} className={`flex items-center gap-3 px-6 py-3 ${cls.is_mine ? "bg-green-50/50" : ""}`}>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{cls.name}</p>
+                <p className="text-xs text-gray-400">
+                  {cls.primary_teacher_name ? `${cls.primary_teacher_name} · ` : ""}
+                  {cls.grade_level ? `Grade ${cls.grade_level}` : ""}
+                  {cls.student_count ? ` · ${cls.student_count} students` : ""}
+                </p>
+              </div>
+              <button
+                onClick={() => toggle(cls)}
+                disabled={toggling === cls.id}
+                className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all ${
+                  cls.is_mine
+                    ? "bg-green-100 text-green-700 border-green-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-crimson hover:text-crimson"
+                }`}
+              >
+                {toggling === cls.id ? "…" : cls.is_mine ? "✓ My Class" : "Claim"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ClassWindow {
   id: string;
   name: string;
@@ -41,6 +154,7 @@ function isActive(w: ClassWindow) {
 export default function TeacherDashboard() {
   const [classes, setClasses] = useState<TeacherClass[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showClaiming, setShowClaiming] = useState(false);
 
   useEffect(() => {
     fetch("/api/teacher/classes")
@@ -48,6 +162,15 @@ export default function TeacherDashboard() {
       .then((data) => { setClasses(data as TeacherClass[]); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
+
+  function handleClaimDone() {
+    setShowClaiming(false);
+    setLoading(true);
+    fetch("/api/teacher/classes")
+      .then((r) => r.json())
+      .then((data) => { setClasses(data as TeacherClass[]); setLoading(false); })
+      .catch(() => setLoading(false));
+  }
 
   const activeWindowCount = classes.reduce(
     (sum, cls) => sum + cls.windows.filter(isActive).length,
@@ -58,17 +181,31 @@ export default function TeacherDashboard() {
     <div className="min-h-screen bg-warm">
       <NavBar />
       <div className="max-w-5xl mx-auto px-4 py-8">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">My Classes</h1>
-          <p className="text-gray-500 mt-1">
-            {classes.length} {classes.length === 1 ? "class" : "classes"} ·{" "}
-            {activeWindowCount} active survey{activeWindowCount !== 1 ? "s" : ""}
-          </p>
+        <div className="mb-6 flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">My Classes</h1>
+            <p className="text-gray-500 mt-1">
+              {classes.length} {classes.length === 1 ? "class" : "classes"} ·{" "}
+              {activeWindowCount} active survey{activeWindowCount !== 1 ? "s" : ""}
+            </p>
+          </div>
+          {!loading && (
+            <button
+              onClick={() => setShowClaiming((v) => !v)}
+              className="text-sm border border-gray-200 px-4 py-2 rounded-xl text-gray-600 hover:border-crimson hover:text-crimson transition-colors"
+            >
+              {showClaiming ? "Hide" : "Manage Classes"}
+            </button>
+          )}
         </div>
+
+        {(showClaiming || (!loading && classes.length === 0)) && (
+          <ClaimClassesPanel onDone={handleClaimDone} />
+        )}
 
         {loading && <div className="text-center text-gray-400 py-12">Loading…</div>}
 
-        {!loading && classes.length === 0 && (
+        {!loading && classes.length === 0 && !showClaiming && (
           <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
             <p className="text-gray-400">No classes assigned yet. Contact your administrator.</p>
           </div>

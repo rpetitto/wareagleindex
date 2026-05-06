@@ -1,5 +1,15 @@
 import { migrate, db } from "flingit";
 
+migrate("002_classes_teacher_fields", async () => {
+  // Add teacher info columns to classes (safe if already exists)
+  try {
+    await db.prepare(`ALTER TABLE classes ADD COLUMN primary_teacher_vc_id TEXT`).run();
+  } catch { /* column already exists */ }
+  try {
+    await db.prepare(`ALTER TABLE classes ADD COLUMN primary_teacher_name TEXT`).run();
+  } catch { /* column already exists */ }
+});
+
 migrate("001_core_schema", async () => {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS users (

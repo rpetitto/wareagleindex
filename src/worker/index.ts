@@ -330,6 +330,53 @@ app.get("/api/teacher/classes", async (c) => {
   return c.json(result);
 });
 
+// Teacher: browse all classes and claim ones they teach
+app.get("/api/teacher/all-classes", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  if (user.role !== "teacher" && user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const rows = await db
+    .prepare(
+      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year,
+              c.primary_teacher_name, c.primary_teacher_vc_id,
+              CASE WHEN tc.teacher_id = ?1 THEN 1 ELSE 0 END as is_mine,
+              COUNT(DISTINCT e.student_id) as student_count
+       FROM classes c
+       LEFT JOIN teacher_classes tc ON tc.class_id = c.id AND tc.teacher_id = ?1
+       LEFT JOIN enrollments e ON e.class_id = c.id
+       GROUP BY c.id ORDER BY c.name LIMIT 500`
+    )
+    .bind(user.id)
+    .all();
+
+  return c.json(rows.results);
+});
+
+// Teacher: claim (or unclaim) a class
+app.post("/api/teacher/claim-class/:classId", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  if (user.role !== "teacher" && user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { classId } = c.req.param();
+  const { claim } = await c.req.json<{ claim: boolean }>();
+
+  if (claim) {
+    await db
+      .prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
+      .bind(crypto.randomUUID(), user.id, classId)
+      .run();
+  } else {
+    await db
+      .prepare(`DELETE FROM teacher_classes WHERE teacher_id = ?1 AND class_id = ?2`)
+      .bind(user.id, classId)
+      .run();
+  }
+
+  return c.json({ ok: true });
+});
+
 app.get("/api/teacher/classes/:classId/results/:windowId", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "Unauthorized" }, 401);

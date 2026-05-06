@@ -1,36 +1,48 @@
 import { db, secrets } from "flingit";
 
-interface VCPerson {
-  id: string;
-  attributes: {
-    first_name: string;
-    last_name: string;
-    email_1?: string;
-    school_email?: string;
-    person_pk?: number;
-  };
+interface VCStudent {
+  id: number;
+  first_name: string;
+  last_name: string;
+  preferred_name?: string | null;
+  email_1?: string | null;
+  username?: string | null;
+  grade_level: number;
+  school_level: number;
 }
 
-interface VCSection {
-  id: string;
-  attributes: {
-    name?: string;
-    section_name?: string;
-    course_name?: string;
-    grade_level_name?: string;
-    school_year_name?: string;
-    term_name?: string;
-    section_pk?: number;
-  };
+interface VCStaff {
+  id: number;
+  first_name: string;
+  last_name: string;
+  preferred_name?: string | null;
+  email_1?: string | null;
+  username?: string | null;
+  roles?: string | null; // e.g. "Faculty", "Staff", "Coach, Faculty"
+  job_title?: string | null;
+  faculty_type?: number | null;
 }
 
 interface VCEnrollment {
-  id: string;
-  attributes: {
-    person_pk: number;
-    section_pk: number;
-    role?: string;
-  };
+  id: number;
+  internal_class_id: number;
+  class_description: string;
+  class_status: number;
+  currently_enrolled: boolean;
+  grade_level_id: number;
+  person_id: number;
+  primary_teacher?: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    preferred_name?: string | null;
+  } | null;
+}
+
+interface VCPhoto {
+  id: number;
+  person_id: number;
+  download_url: string;
 }
 
 async function getVCToken(): Promise<string> {
@@ -45,33 +57,24 @@ async function getVCToken(): Promise<string> {
       grant_type: "client_credentials",
       client_id: clientId,
       client_secret: clientSecret,
-      scope: "schools:read",
+      scope: "students:list staff_faculty:list academics.enrollments:list person_photos:list",
     }),
   });
 
   if (!res.ok) throw new Error(`Veracross token error: ${res.status}`);
-  const data = (await res.json()) as { access_token: string };
+  const data = (await res.json()) as { access_token?: string; error?: string };
+  if (!data.access_token) throw new Error(`Veracross auth failed: ${data.error ?? "no token"}`);
   return data.access_token;
 }
 
-async function fetchAllPages<T>(
-  baseUrl: string,
-  token: string
-): Promise<T[]> {
-  const results: T[] = [];
-  let url: string | null = `${baseUrl}&page[size]=200&page[number]=1`;
-
-  while (url) {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Veracross API error ${res.status}: ${url}`);
-    const json = (await res.json()) as { data: T[]; links?: { next?: string } };
-    results.push(...(json.data || []));
-    url = json.links?.next || null;
-  }
-
-  return results;
+async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
+  const res = await fetch(`${base}/${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
+  const json = (await res.json()) as { data?: T[]; error?: string };
+  if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
+  return json.data ?? [];
 }
 
 export interface SyncResult {
@@ -87,165 +90,188 @@ export async function syncVeracross(): Promise<SyncResult> {
   const base = `https://api.veracross.com/${school}/v3`;
   const token = await getVCToken();
 
-  // Fetch students
-  const students = await fetchAllPages<VCPerson>(
-    `${base}/people?filter[type][]=Student`,
-    token
-  );
-
-  // Fetch faculty
-  const faculty = await fetchAllPages<VCPerson>(
-    `${base}/people?filter[type][]=Faculty`,
-    token
-  );
-
-  // Fetch sections
-  const sections = await fetchAllPages<VCSection>(`${base}/sections?`, token);
-
-  // Fetch section enrollments (students in sections)
-  const enrollments = await fetchAllPages<VCEnrollment>(
-    `${base}/section-enrollments?filter[role]=Student`,
-    token
-  );
-
-  // Fetch section staff (teachers in sections)
-  const sectionStaff = await fetchAllPages<VCEnrollment>(
-    `${base}/section-staff?`,
-    token
-  );
-
-  // Upsert students
-  for (const s of students) {
-    const email = s.attributes.school_email || s.attributes.email_1;
-    if (!email) continue;
-    const name = `${s.attributes.first_name} ${s.attributes.last_name}`.trim();
-    const vcId = String(s.attributes.person_pk || s.id);
-
-    await db
-      .prepare(
-        `INSERT INTO users (id, google_id, email, name, role, veracross_id)
-         VALUES (?1, ?2, ?3, ?4, 'student', ?5)
-         ON CONFLICT(email) DO UPDATE SET
-           name = excluded.name,
-           veracross_id = excluded.veracross_id,
-           updated_at = datetime('now')
-         WHERE role != 'admin'`
-      )
-      .bind(crypto.randomUUID(), `vc_${vcId}`, email.toLowerCase(), name, vcId)
-      .run();
+  // ── 1. Sync person photos (build a map for enriching profiles) ────────────
+  const photos = await vcGet<VCPhoto>(base, "person_photos", token);
+  const photoByPersonId = new Map<number, string>();
+  for (const p of photos) {
+    photoByPersonId.set(p.person_id, p.download_url);
   }
 
-  // Upsert faculty
+  // ── 2. Sync faculty (teachers) — do this BEFORE enrollments so teacher- ───
+  //       class linking works when we iterate through enrollments.           ──
+  const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
+  const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
+
   for (const f of faculty) {
-    const email = f.attributes.school_email || f.attributes.email_1;
+    const email = (f.email_1 || f.username || "").toLowerCase().trim();
     if (!email) continue;
-    const name = `${f.attributes.first_name} ${f.attributes.last_name}`.trim();
-    const vcId = String(f.attributes.person_pk || f.id);
+
+    const name = f.preferred_name
+      ? `${f.preferred_name} ${f.last_name}`.trim()
+      : `${f.first_name} ${f.last_name}`.trim();
+    const vcId = String(f.id);
+    const photo = photoByPersonId.get(f.id) ?? null;
 
     await db
       .prepare(
-        `INSERT INTO users (id, google_id, email, name, role, veracross_id)
-         VALUES (?1, ?2, ?3, ?4, 'teacher', ?5)
+        `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
+         VALUES (?1, ?2, ?3, ?4, 'teacher', ?5, ?6)
          ON CONFLICT(email) DO UPDATE SET
            name = excluded.name,
            veracross_id = excluded.veracross_id,
            role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'teacher' END,
+           picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
            updated_at = datetime('now')`
       )
-      .bind(crypto.randomUUID(), `vc_${vcId}`, email.toLowerCase(), name, vcId)
+      .bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo)
       .run();
   }
 
-  // Upsert sections as classes
-  for (const sec of sections) {
-    const vcId = String(sec.attributes.section_pk || sec.id);
-    const name =
-      sec.attributes.section_name ||
-      sec.attributes.name ||
-      sec.attributes.course_name ||
-      `Section ${vcId}`;
+  // ── 3. Sync students ──────────────────────────────────────────────────────
+  const students = await vcGet<VCStudent>(base, "students", token);
+  const studentEmailById = new Map<number, string>();
+
+  for (const s of students) {
+    const email = (s.email_1 || s.username || "").toLowerCase().trim();
+    if (!email) continue;
+
+    const name = s.preferred_name
+      ? `${s.preferred_name} ${s.last_name}`.trim()
+      : `${s.first_name} ${s.last_name}`.trim();
+    const vcId = String(s.id);
+    const photo = photoByPersonId.get(s.id) ?? null;
 
     await db
       .prepare(
-        `INSERT INTO classes (id, veracross_id, name, subject, grade_level, school_year, term)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(veracross_id) DO UPDATE SET
+        `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
+         VALUES (?1, ?2, ?3, ?4, 'student', ?5, ?6)
+         ON CONFLICT(email) DO UPDATE SET
            name = excluded.name,
-           subject = excluded.subject,
-           grade_level = excluded.grade_level,
-           school_year = excluded.school_year,
-           term = excluded.term`
+           veracross_id = excluded.veracross_id,
+           picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
+           updated_at = datetime('now')
+         WHERE role != 'admin'`
       )
-      .bind(
-        crypto.randomUUID(),
-        vcId,
-        name,
-        sec.attributes.course_name || null,
-        sec.attributes.grade_level_name || null,
-        sec.attributes.school_year_name || null,
-        sec.attributes.term_name || null
-      )
+      .bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo)
       .run();
+
+    studentEmailById.set(s.id, email);
   }
 
-  // Sync student enrollments
+  // ── 4. For each student, fetch their real enrollments ────────────────────
   let enrollCount = 0;
-  for (const e of enrollments) {
-    const studentVcId = String(e.attributes.person_pk);
-    const sectionVcId = String(e.attributes.section_pk);
-
-    const student = await db
-      .prepare(`SELECT id FROM users WHERE veracross_id = ?1`)
-      .bind(studentVcId)
-      .first<{ id: string }>();
-    const cls = await db
-      .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
-      .bind(sectionVcId)
-      .first<{ id: string }>();
-
-    if (!student || !cls) continue;
-
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO enrollments (id, student_id, class_id)
-         VALUES (?1, ?2, ?3)`
-      )
-      .bind(crypto.randomUUID(), student.id, cls.id)
-      .run();
-    enrollCount++;
-  }
-
-  // Sync teacher assignments
+  let classCount = 0;
   let teacherCount = 0;
-  for (const s of sectionStaff) {
-    const teacherVcId = String(s.attributes.person_pk);
-    const sectionVcId = String(s.attributes.section_pk);
+  const processedClassIds = new Set<number>();
 
-    const teacher = await db
-      .prepare(`SELECT id FROM users WHERE veracross_id = ?1`)
-      .bind(teacherVcId)
+  for (const s of students) {
+    const studentEmail = studentEmailById.get(s.id);
+    if (!studentEmail) continue;
+
+    const studentUser = await db
+      .prepare(`SELECT id FROM users WHERE email = ?1`)
+      .bind(studentEmail)
       .first<{ id: string }>();
-    const cls = await db
-      .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
-      .bind(sectionVcId)
-      .first<{ id: string }>();
+    if (!studentUser) continue;
 
-    if (!teacher || !cls) continue;
+    const enrollments = await vcGet<VCEnrollment>(
+      base,
+      `academics/enrollments?person_id=${s.id}`,
+      token
+    );
 
-    await db
-      .prepare(
-        `INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id)
-         VALUES (?1, ?2, ?3)`
-      )
-      .bind(crypto.randomUUID(), teacher.id, cls.id)
-      .run();
-    teacherCount++;
+    for (const enroll of enrollments) {
+      if (!enroll.currently_enrolled) continue;
+
+      const classVcId = String(enroll.internal_class_id);
+
+      // Upsert class (built from enrollment data which includes teacher info)
+      if (!processedClassIds.has(enroll.internal_class_id)) {
+        processedClassIds.add(enroll.internal_class_id);
+
+        const teacherVcId = enroll.primary_teacher?.id
+          ? String(enroll.primary_teacher.id)
+          : null;
+        const teacherDisplayName = enroll.primary_teacher
+          ? (
+              (enroll.primary_teacher.preferred_name?.trim() || enroll.primary_teacher.first_name?.trim()) +
+              " " +
+              enroll.primary_teacher.last_name?.trim()
+            ).trim()
+          : null;
+
+        await db
+          .prepare(
+            `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(veracross_id) DO UPDATE SET
+               name = excluded.name,
+               grade_level = excluded.grade_level,
+               primary_teacher_vc_id = excluded.primary_teacher_vc_id,
+               primary_teacher_name = excluded.primary_teacher_name`
+          )
+          .bind(
+            crypto.randomUUID(),
+            classVcId,
+            enroll.class_description,
+            enroll.grade_level_id != null ? String(enroll.grade_level_id) : null,
+            teacherVcId,
+            teacherDisplayName
+          )
+          .run();
+
+        classCount++;
+
+        // Link teacher to class if their account exists
+        if (teacherVcId) {
+          const teacher = await db
+            .prepare(
+              `SELECT id FROM users WHERE veracross_id = ?1 AND (role = 'teacher' OR role = 'admin')`
+            )
+            .bind(teacherVcId)
+            .first<{ id: string }>();
+
+          if (teacher) {
+            const classRecord = await db
+              .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
+              .bind(classVcId)
+              .first<{ id: string }>();
+
+            if (classRecord) {
+              await db
+                .prepare(
+                  `INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`
+                )
+                .bind(crypto.randomUUID(), teacher.id, classRecord.id)
+                .run();
+              teacherCount++;
+            }
+          }
+        }
+      }
+
+      // Create enrollment link
+      const classRecord = await db
+        .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
+        .bind(classVcId)
+        .first<{ id: string }>();
+
+      if (classRecord) {
+        await db
+          .prepare(
+            `INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`
+          )
+          .bind(crypto.randomUUID(), studentUser.id, classRecord.id)
+          .run();
+        enrollCount++;
+      }
+    }
   }
 
   return {
     students: students.length,
     teachers: faculty.length,
-    classes: sections.length,
+    classes: classCount,
     enrollments: enrollCount,
     teacherAssignments: teacherCount,
   };
