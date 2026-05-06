@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Login from "./pages/Login";
 import StudentDashboard from "./pages/StudentDashboard";
 import SurveyTaker from "./pages/SurveyTaker";
+import EngagementSurvey from "./pages/EngagementSurvey";
 import TeacherDashboard from "./pages/TeacherDashboard";
 import ClassResults from "./pages/ClassResults";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -70,6 +71,10 @@ export default function App() {
         <Route
           path="/student"
           element={user ? <StudentDashboard /> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/student/survey/:windowId"
+          element={user ? <EngagementSurvey /> : <Navigate to="/login" replace />}
         />
         <Route
           path="/student/survey/:windowId/:classId"

@@ -27,8 +27,9 @@ interface VCEnrollment {
   id: number;
   internal_class_id: number;
   class_description: string;
-  class_status: number;
+  class_status: string | number | null;
   currently_enrolled: boolean;
+  exclude_from_transcript?: boolean | null;
   grade_level_id: number;
   person_id: number;
   primary_teacher?: {
@@ -164,9 +165,19 @@ export async function syncVeracross(): Promise<SyncResult> {
   }
 
   // ── 4. All enrollments in ONE request (no per-student loops) ─────────────
-  // Fetching per-student would require 100s of sequential API calls and time out.
-  const allEnrollments = await vcGet<VCEnrollment>(base, "academics/enrollments", token);
-  const activeEnrollments = allEnrollments.filter((e) => e.currently_enrolled);
+  // Filter at the API level: currently enrolled, appears on transcript.
+  const allEnrollments = await vcGet<VCEnrollment>(
+    base,
+    "academics/enrollments?currently_enrolled=true&exclude_from_transcript=false",
+    token
+  );
+  // Also filter client-side to exclude future classes and confirm conditions.
+  const activeEnrollments = allEnrollments.filter(
+    (e) =>
+      e.currently_enrolled &&
+      e.exclude_from_transcript !== true &&
+      String(e.class_status).toLowerCase() !== "future"
+  );
 
   // ── 5. Collect unique classes from enrollment data ────────────────────────
   interface ClassInfo {

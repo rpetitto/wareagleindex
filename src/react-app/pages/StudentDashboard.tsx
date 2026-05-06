@@ -138,7 +138,11 @@ export default function StudentDashboard() {
                 {pending.map((cls) => (
                   <Link
                     key={cls.id}
-                    to={`/student/survey/${group.window.id}/${cls.id}`}
+                    to={
+                      group.window.type === "engagement_index"
+                        ? `/student/survey/${group.window.id}`
+                        : `/student/survey/${group.window.id}/${cls.id}`
+                    }
                     className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors group"
                   >
                     <div>
