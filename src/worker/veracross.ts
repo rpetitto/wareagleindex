@@ -18,7 +18,7 @@ interface VCStaff {
   preferred_name?: string | null;
   email_1?: string | null;
   username?: string | null;
-  roles?: string | null; // e.g. "Faculty", "Staff", "Coach, Faculty"
+  roles?: string | null;
   job_title?: string | null;
   faculty_type?: number | null;
 }
@@ -70,15 +70,13 @@ async function getVCToken(): Promise<string> {
 async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
   const PAGE_SIZE = 100;
   const headers = { Authorization: `Bearer ${token}` };
-
-  // Try first page with pagination params; if the endpoint rejects them (400),
-  // fall back to a plain fetch and return whatever the API gives us.
   const separator = path.includes("?") ? "&" : "?";
+
+  // Try first page with pagination; fall back if endpoint rejects params (400)
   const firstUrl = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=1`;
   const firstRes = await fetch(firstUrl, { headers });
 
   if (firstRes.status === 400) {
-    // Endpoint doesn't support pagination params — fetch without them
     const res = await fetch(`${base}/${path}`, { headers });
     if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
     const json = (await res.json()) as { data?: T[]; error?: string };
@@ -93,7 +91,6 @@ async function vcGet<T>(base: string, path: string, token: string): Promise<T[]>
   const all: T[] = [...(firstJson.data ?? [])];
   if (all.length < PAGE_SIZE) return all;
 
-  // Keep paging until we get a partial page
   let page = 2;
   while (true) {
     const url = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=${page}`;
@@ -122,28 +119,23 @@ export async function syncVeracross(): Promise<SyncResult> {
   const base = `https://api.veracross.com/${school}/v3`;
   const token = await getVCToken();
 
-  // ── 1. Sync person photos (build a map for enriching profiles) ────────────
+  // ── 1. Photos ─────────────────────────────────────────────────────────────
   const photos = await vcGet<VCPhoto>(base, "person_photos", token);
   const photoByPersonId = new Map<number, string>();
-  for (const p of photos) {
-    photoByPersonId.set(p.person_id, p.download_url);
-  }
+  for (const p of photos) photoByPersonId.set(p.person_id, p.download_url);
 
-  // ── 2. Sync faculty (teachers) — do this BEFORE enrollments so teacher- ───
-  //       class linking works when we iterate through enrollments.           ──
+  // ── 2. Faculty ────────────────────────────────────────────────────────────
   const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
   const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
 
   for (const f of faculty) {
     const email = (f.email_1 || f.username || "").toLowerCase().trim();
     if (!email) continue;
-
     const name = f.preferred_name
       ? `${f.preferred_name} ${f.last_name}`.trim()
       : `${f.first_name} ${f.last_name}`.trim();
     const vcId = String(f.id);
     const photo = photoByPersonId.get(f.id) ?? null;
-
     await db
       .prepare(
         `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
@@ -159,20 +151,17 @@ export async function syncVeracross(): Promise<SyncResult> {
       .run();
   }
 
-  // ── 3. Sync students ──────────────────────────────────────────────────────
+  // ── 3. Students ───────────────────────────────────────────────────────────
   const students = await vcGet<VCStudent>(base, "students", token);
-  const studentEmailById = new Map<number, string>();
 
   for (const s of students) {
     const email = (s.email_1 || s.username || "").toLowerCase().trim();
     if (!email) continue;
-
     const name = s.preferred_name
       ? `${s.preferred_name} ${s.last_name}`.trim()
       : `${s.first_name} ${s.last_name}`.trim();
     const vcId = String(s.id);
     const photo = photoByPersonId.get(s.id) ?? null;
-
     await db
       .prepare(
         `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
@@ -186,124 +175,106 @@ export async function syncVeracross(): Promise<SyncResult> {
       )
       .bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo)
       .run();
-
-    studentEmailById.set(s.id, email);
   }
 
-  // ── 4. For each student, fetch their real enrollments ────────────────────
+  // ── 4. All enrollments in ONE request (no per-student loops) ─────────────
+  // Fetching per-student would require 100s of sequential API calls and time out.
+  const allEnrollments = await vcGet<VCEnrollment>(base, "academics/enrollments", token);
+  const activeEnrollments = allEnrollments.filter((e) => e.currently_enrolled);
+
+  // ── 5. Collect unique classes from enrollment data ────────────────────────
+  interface ClassInfo {
+    vcId: string;
+    name: string;
+    gradeLevel: string | null;
+    teacherVcId: string | null;
+    teacherName: string | null;
+  }
+  const classMap = new Map<number, ClassInfo>();
+  for (const e of activeEnrollments) {
+    if (classMap.has(e.internal_class_id)) continue;
+    const teacherVcId = e.primary_teacher?.id ? String(e.primary_teacher.id) : null;
+    const teacherName = e.primary_teacher
+      ? (
+          (e.primary_teacher.preferred_name?.trim() || e.primary_teacher.first_name?.trim()) +
+          " " +
+          e.primary_teacher.last_name?.trim()
+        ).trim()
+      : null;
+    classMap.set(e.internal_class_id, {
+      vcId: String(e.internal_class_id),
+      name: e.class_description,
+      gradeLevel: e.grade_level_id != null ? String(e.grade_level_id) : null,
+      teacherVcId,
+      teacherName,
+    });
+  }
+
+  // ── 6. Upsert all classes ─────────────────────────────────────────────────
+  for (const cls of classMap.values()) {
+    await db
+      .prepare(
+        `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(veracross_id) DO UPDATE SET
+           name = excluded.name,
+           grade_level = excluded.grade_level,
+           primary_teacher_vc_id = excluded.primary_teacher_vc_id,
+           primary_teacher_name = excluded.primary_teacher_name`
+      )
+      .bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
+      .run();
+  }
+
+  // ── 7. Build in-memory lookup maps from DB (two queries total) ────────────
+  const userRows = await db
+    .prepare(`SELECT id, veracross_id FROM users WHERE veracross_id IS NOT NULL`)
+    .all<{ id: string; veracross_id: string }>();
+  const userIdByVcId = new Map<string, string>();
+  for (const u of userRows.results ?? []) userIdByVcId.set(u.veracross_id, u.id);
+
+  const classRows = await db
+    .prepare(`SELECT id, veracross_id FROM classes WHERE veracross_id IS NOT NULL`)
+    .all<{ id: string; veracross_id: string }>();
+  const classIdByVcId = new Map<string, string>();
+  for (const c of classRows.results ?? []) classIdByVcId.set(c.veracross_id, c.id);
+
+  // ── 8. Insert enrollment links ────────────────────────────────────────────
   let enrollCount = 0;
-  let classCount = 0;
+  for (const e of activeEnrollments) {
+    const studentUserId = userIdByVcId.get(String(e.person_id));
+    const classId = classIdByVcId.get(String(e.internal_class_id));
+    if (!studentUserId || !classId) continue;
+    await db
+      .prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
+      .bind(crypto.randomUUID(), studentUserId, classId)
+      .run();
+    enrollCount++;
+  }
+
+  // ── 9. Link teachers to classes (one join query + inserts) ────────────────
+  const teacherLinks = await db
+    .prepare(
+      `SELECT c.id AS class_id, u.id AS teacher_id
+       FROM classes c
+       JOIN users u ON u.veracross_id = c.primary_teacher_vc_id
+       WHERE u.role IN ('teacher', 'admin') AND c.primary_teacher_vc_id IS NOT NULL`
+    )
+    .all<{ class_id: string; teacher_id: string }>();
+
   let teacherCount = 0;
-  const processedClassIds = new Set<number>();
-
-  for (const s of students) {
-    const studentEmail = studentEmailById.get(s.id);
-    if (!studentEmail) continue;
-
-    const studentUser = await db
-      .prepare(`SELECT id FROM users WHERE email = ?1`)
-      .bind(studentEmail)
-      .first<{ id: string }>();
-    if (!studentUser) continue;
-
-    const enrollments = await vcGet<VCEnrollment>(
-      base,
-      `academics/enrollments?person_id=${s.id}`,
-      token
-    );
-
-    for (const enroll of enrollments) {
-      if (!enroll.currently_enrolled) continue;
-
-      const classVcId = String(enroll.internal_class_id);
-
-      // Upsert class (built from enrollment data which includes teacher info)
-      if (!processedClassIds.has(enroll.internal_class_id)) {
-        processedClassIds.add(enroll.internal_class_id);
-
-        const teacherVcId = enroll.primary_teacher?.id
-          ? String(enroll.primary_teacher.id)
-          : null;
-        const teacherDisplayName = enroll.primary_teacher
-          ? (
-              (enroll.primary_teacher.preferred_name?.trim() || enroll.primary_teacher.first_name?.trim()) +
-              " " +
-              enroll.primary_teacher.last_name?.trim()
-            ).trim()
-          : null;
-
-        await db
-          .prepare(
-            `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(veracross_id) DO UPDATE SET
-               name = excluded.name,
-               grade_level = excluded.grade_level,
-               primary_teacher_vc_id = excluded.primary_teacher_vc_id,
-               primary_teacher_name = excluded.primary_teacher_name`
-          )
-          .bind(
-            crypto.randomUUID(),
-            classVcId,
-            enroll.class_description,
-            enroll.grade_level_id != null ? String(enroll.grade_level_id) : null,
-            teacherVcId,
-            teacherDisplayName
-          )
-          .run();
-
-        classCount++;
-
-        // Link teacher to class if their account exists
-        if (teacherVcId) {
-          const teacher = await db
-            .prepare(
-              `SELECT id FROM users WHERE veracross_id = ?1 AND (role = 'teacher' OR role = 'admin')`
-            )
-            .bind(teacherVcId)
-            .first<{ id: string }>();
-
-          if (teacher) {
-            const classRecord = await db
-              .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
-              .bind(classVcId)
-              .first<{ id: string }>();
-
-            if (classRecord) {
-              await db
-                .prepare(
-                  `INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`
-                )
-                .bind(crypto.randomUUID(), teacher.id, classRecord.id)
-                .run();
-              teacherCount++;
-            }
-          }
-        }
-      }
-
-      // Create enrollment link
-      const classRecord = await db
-        .prepare(`SELECT id FROM classes WHERE veracross_id = ?1`)
-        .bind(classVcId)
-        .first<{ id: string }>();
-
-      if (classRecord) {
-        await db
-          .prepare(
-            `INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`
-          )
-          .bind(crypto.randomUUID(), studentUser.id, classRecord.id)
-          .run();
-        enrollCount++;
-      }
-    }
+  for (const link of teacherLinks.results ?? []) {
+    await db
+      .prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
+      .bind(crypto.randomUUID(), link.teacher_id, link.class_id)
+      .run();
+    teacherCount++;
   }
 
   return {
     students: students.length,
     teachers: faculty.length,
-    classes: classCount,
+    classes: classMap.size,
     enrollments: enrollCount,
     teacherAssignments: teacherCount,
   };
