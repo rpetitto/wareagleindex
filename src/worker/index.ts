@@ -115,12 +115,11 @@ app.get("/api/student/surveys", async (c) => {
   const windows = await db
     .prepare(
       `SELECT id, name, type, opens_at, closes_at FROM survey_windows
-       WHERE opens_at <= datetime('now') AND closes_at >= datetime('now')
+       WHERE datetime(opens_at) <= datetime('now') AND datetime(closes_at) >= datetime('now')
        ORDER BY closes_at`
     )
     .all<{ id: string; name: string; type: string; opens_at: string; closes_at: string }>();
 
-  // For each window × class, check if student already responded
   const result = [];
   for (const win of windows.results) {
     const entries = [];
@@ -472,7 +471,7 @@ app.get("/api/admin/overview", async (c) => {
   const activeWindows = await db
     .prepare(
       `SELECT id, name, type, opens_at, closes_at FROM survey_windows
-       WHERE opens_at <= datetime('now') AND closes_at >= datetime('now')
+       WHERE datetime(opens_at) <= datetime('now') AND datetime(closes_at) >= datetime('now')
        ORDER BY closes_at`
     )
     .all<{ id: string; name: string; type: string; opens_at: string; closes_at: string }>();
@@ -518,12 +517,14 @@ app.post("/api/admin/surveys", async (c) => {
     }>();
 
   const id = crypto.randomUUID();
+  const normOpen = opens_at.replace("T", " ");
+  const normClose = closes_at.replace("T", " ");
   await db
     .prepare(
       `INSERT INTO survey_windows (id, name, type, opens_at, closes_at, target_all, created_by)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
     )
-    .bind(id, name, type, opens_at, closes_at, target_all ? 1 : 0, user.id)
+    .bind(id, name, type, normOpen, normClose, target_all ? 1 : 0, user.id)
     .run();
 
   if (!target_all && class_ids?.length) {
@@ -551,7 +552,7 @@ app.put("/api/admin/surveys/:id", async (c) => {
 
   await db
     .prepare(`UPDATE survey_windows SET name = ?1, opens_at = ?2, closes_at = ?3 WHERE id = ?4`)
-    .bind(name, opens_at, closes_at, id)
+    .bind(name, opens_at.replace("T", " "), closes_at.replace("T", " "), id)
     .run();
 
   return c.json({ ok: true });
