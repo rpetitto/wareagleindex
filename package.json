@@ -9,18 +9,20 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "flingit": "^0.0.66",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "flingit": "^0.0.66"
+    "react-router-dom": "^7.15.0",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
-    "vite": "^7.3.1",
-    "@vitejs/plugin-react": "^5.1.4",
     "@tailwindcss/vite": "^4",
-    "tailwindcss": "^4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "typescript": "~5.9.3"
+    "@vitejs/plugin-react": "^5.1.4",
+    "tailwindcss": "^4",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1"
   },
   "fling": {
     "projectName": "ewnyrc"

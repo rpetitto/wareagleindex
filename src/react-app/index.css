@@ -1,15 +1,25 @@
 @import "tailwindcss";
 
+@theme {
+  --color-crimson: #8B0000;
+  --color-crimson-dark: #6B0000;
+  --color-gold: #C5A028;
+  --color-gold-light: #F5E299;
+  --color-warm: #F9F6F1;
+}
+
 :root {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
-  color: #213547;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1a1a2e;
+  background-color: #F9F6F1;
 }
 
 body {
   min-height: 100vh;
-  display: flex;
-  place-items: center;
-  justify-content: center;
 }
+
+/* Quadrant grid colors */
+.quadrant-flow { background: rgba(34, 197, 94, 0.12); }
+.quadrant-comfort { background: rgba(234, 179, 8, 0.12); }
+.quadrant-anxiety { background: rgba(239, 68, 68, 0.12); }
+.quadrant-boredom { background: rgba(156, 163, 175, 0.12); }
