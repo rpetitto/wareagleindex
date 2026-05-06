@@ -7,13 +7,7 @@ export default function NavBar() {
 
   const links =
     user?.role === "admin"
-      ? [
-          { to: "/admin", label: "Overview" },
-          { to: "/admin/surveys", label: "Surveys" },
-          { to: "/admin/users", label: "Users" },
-          { to: "/admin/sync", label: "Sync" },
-          { to: "/teacher", label: "Teacher View" },
-        ]
+      ? [{ to: "/teacher", label: "Teacher View" }]
       : user?.role === "teacher"
       ? [{ to: "/teacher", label: "My Classes" }]
       : [{ to: "/student", label: "My Surveys" }];
