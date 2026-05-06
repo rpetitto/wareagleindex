@@ -2,15 +2,17 @@ export default function Login() {
   const error = new URLSearchParams(window.location.search).get("error");
 
   return (
-    <div className="min-h-screen bg-warm flex items-center justify-center px-4">
+    <div className="min-h-screen bg-warm flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-sm">
         {/* Logo / header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-crimson mb-4 shadow-lg">
-            <span className="text-gold font-black text-2xl">W</span>
+            <span className="text-white font-black text-2xl tracking-tight">WA</span>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">War Eagle Index</h1>
-          <p className="text-gray-500 mt-1 text-sm">Woodward Academy · Student Engagement</p>
+          <h1 className="text-3xl font-bold text-navy">War Eagle Index</h1>
+          <p className="text-gray-500 mt-1 text-sm tracking-wide uppercase font-medium">
+            Woodward Academy · Student Engagement
+          </p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
@@ -39,9 +41,16 @@ export default function Login() {
           </p>
         </div>
 
-        <p className="text-center text-gray-400 text-xs mt-6">
-          Woodward Academy · College Park, GA
-        </p>
+        {/* Mission / motto */}
+        <div className="mt-8 text-center space-y-3">
+          <p className="text-xs font-semibold tracking-widest text-crimson uppercase">
+            Excellence · Character · Opportunity
+          </p>
+          <p className="text-xs text-gray-400 leading-relaxed max-w-xs mx-auto">
+            Woodward Academy will be the national model in college-preparatory education.
+          </p>
+          <p className="text-gray-400 text-xs mt-4">College Park, GA</p>
+        </div>
       </div>
     </div>
   );

@@ -68,13 +68,25 @@ async function getVCToken(): Promise<string> {
 }
 
 async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
-  const res = await fetch(`${base}/${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
-  const json = (await res.json()) as { data?: T[]; error?: string };
-  if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
-  return json.data ?? [];
+  // Paginate automatically — Veracross v3 defaults to 100 records per page
+  const PAGE_SIZE = 100;
+  const all: T[] = [];
+  let page = 1;
+
+  while (true) {
+    const separator = path.includes("?") ? "&" : "?";
+    const url = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=${page}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
+    const json = (await res.json()) as { data?: T[]; error?: string };
+    if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
+    const records = json.data ?? [];
+    all.push(...records);
+    if (records.length < PAGE_SIZE) break;
+    page++;
+  }
+
+  return all;
 }
 
 export interface SyncResult {

@@ -19,13 +19,13 @@ export default function NavBar() {
       : [{ to: "/student", label: "My Surveys" }];
 
   return (
-    <nav className="bg-crimson text-white shadow-md">
+    <nav className="bg-navy text-white shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center gap-8">
             <Link to="/" className="flex items-center gap-2">
-              <span className="text-gold font-bold text-lg tracking-tight">WAI</span>
-              <span className="text-white/80 text-sm hidden sm:inline">War Eagle Index</span>
+              <span className="text-crimson font-bold text-lg tracking-tight bg-white/10 px-2 py-0.5 rounded">WAI</span>
+              <span className="text-white/80 text-sm hidden sm:inline font-medium">War Eagle Index</span>
             </Link>
             <div className="flex items-center gap-1">
               {links.map((l) => (

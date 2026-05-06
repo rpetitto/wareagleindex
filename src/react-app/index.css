@@ -1,17 +1,20 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Lato:ital,wght@0,400;0,700;1,400&display=swap");
 @import "tailwindcss";
 
 @theme {
-  --color-crimson: #8B0000;
-  --color-crimson-dark: #6B0000;
-  --color-gold: #C5A028;
-  --color-gold-light: #F5E299;
-  --color-warm: #F9F6F1;
+  --color-crimson: #005E63;
+  --color-crimson-dark: #004A4F;
+  --color-gold: #A32136;
+  --color-gold-light: #fce8ec;
+  --color-navy: #0D2B46;
+  --color-teal-light: #E6F4F5;
+  --color-warm: #F6F9F9;
 }
 
 :root {
-  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1a1a2e;
-  background-color: #F9F6F1;
+  font-family: "Outfit", "Lato", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #0D2B46;
+  background-color: #F6F9F9;
 }
 
 body {
