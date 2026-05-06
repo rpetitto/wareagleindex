@@ -409,118 +409,145 @@ function UsersPage() {
 
 // ─── Sync ─────────────────────────────────────────────────────────────────────
 
-interface SyncResult {
-  ok?: boolean;
-  error?: string;
-  students?: number;
-  teachers?: number;
-  classes?: number;
-  enrollments?: number;
-  teacherAssignments?: number;
+interface SyncLog {
+  id: string;
+  ran_at: string;
+  status: string;
+  students: number | null;
+  teachers: number | null;
+  classes: number | null;
+  enrollments: number | null;
+  teacher_assignments: number | null;
+  error_message: string | null;
+  duration_ms: number | null;
 }
 
 function SyncPage() {
   const [syncing, setSyncing] = useState(false);
-  const [result, setResult] = useState<SyncResult | null>(null);
+  const [logs, setLogs] = useState<SyncLog[]>([]);
+  const [logsLoading, setLogsLoading] = useState(true);
+
+  function loadLogs() {
+    setLogsLoading(true);
+    fetch("/api/admin/sync/logs")
+      .then((r) => r.json())
+      .then((d) => { setLogs(d as SyncLog[]); setLogsLoading(false); })
+      .catch(() => setLogsLoading(false));
+  }
+
+  useEffect(loadLogs, []);
 
   async function runSync() {
     setSyncing(true);
-    setResult(null);
     try {
-      const res = await fetch("/api/admin/sync", { method: "POST" });
-      const data = (await res.json()) as SyncResult;
-      setResult(data);
-    } catch {
-      setResult({ error: "Network error" });
-    } finally {
-      setSyncing(false);
-    }
+      await fetch("/api/admin/sync", { method: "POST" });
+    } catch { /* error is recorded server-side */ }
+    setSyncing(false);
+    loadLogs();
+  }
+
+  function fmt(ms: number | null) {
+    if (ms == null) return "";
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
   }
 
   return (
     <div>
-      <h2 className="text-xl font-bold text-gray-900 mb-2">Veracross Sync</h2>
-      <p className="text-gray-500 text-sm mb-6">
-        Sync students, teachers, classes, and enrollments from Veracross. Existing user accounts
-        (matched by email) will have their Veracross ID and class assignments updated. Admin roles
-        are preserved.
-      </p>
-
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-6">
-        <h3 className="font-semibold text-gray-800 mb-3">Required Secrets</h3>
-        <p className="text-sm text-gray-500 mb-4">
-          Configure these via the CLI before running sync:
-        </p>
-        <div className="space-y-2 font-mono text-sm">
-          {[
-            ["VERACROSS_SCHOOL", "Your Veracross school short name"],
-            ["VERACROSS_CLIENT_ID", "OAuth2 client ID from Veracross"],
-            ["VERACROSS_CLIENT_SECRET", "OAuth2 client secret from Veracross"],
-          ].map(([key, desc]) => (
-            <div key={key} className="bg-gray-50 rounded-lg px-3 py-2">
-              <span className="text-crimson font-semibold">{key}</span>
-              <span className="text-gray-400 text-xs ml-2 font-sans">— {desc}</span>
-            </div>
-          ))}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Veracross Sync</h2>
+          <p className="text-gray-500 text-sm mt-1">
+            Syncs students, teachers, classes, and enrollments. Runs are logged below.
+          </p>
         </div>
-        <p className="text-xs text-gray-400 mt-3 font-sans">
-          Run: <code className="bg-gray-100 px-1 py-0.5 rounded">npx fling secret set KEY=value</code>
-        </p>
+        <button
+          onClick={runSync}
+          disabled={syncing}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
+            syncing ? "bg-gray-300 cursor-not-allowed" : "bg-crimson hover:bg-crimson-dark shadow-sm"
+          }`}
+        >
+          {syncing ? (
+            <>
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Syncing…
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Run Veracross Sync
+            </>
+          )}
+        </button>
       </div>
 
-      <button
-        onClick={runSync}
-        disabled={syncing}
-        className={`flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-white transition-all ${
-          syncing ? "bg-gray-300 cursor-not-allowed" : "bg-crimson hover:bg-crimson-dark shadow-sm"
-        }`}
-      >
-        {syncing ? (
-          <>
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-            Syncing…
-          </>
-        ) : (
-          <>
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Run Veracross Sync
-          </>
-        )}
-      </button>
-
-      {result && (
-        <div className={`mt-6 rounded-xl p-5 ${result.error ? "bg-red-50 border border-red-200" : "bg-green-50 border border-green-200"}`}>
-          {result.error ? (
-            <div>
-              <p className="font-semibold text-red-700 mb-1">Sync Failed</p>
-              <p className="text-sm text-red-600">{result.error}</p>
-            </div>
-          ) : (
-            <div>
-              <p className="font-semibold text-green-700 mb-3">Sync Complete!</p>
-              <div className="grid grid-cols-3 gap-3 text-center">
-                {[
-                  ["Students", result.students],
-                  ["Teachers", result.teachers],
-                  ["Classes", result.classes],
-                  ["Enrollments", result.enrollments],
-                  ["Teacher Assignments", result.teacherAssignments],
-                ].map(([label, value]) => (
-                  <div key={label as string} className="bg-white/60 rounded-lg p-2">
-                    <div className="text-xl font-bold text-green-700">{value}</div>
-                    <div className="text-xs text-green-600">{label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-50 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800 text-sm">Sync History</h3>
+          <span className="text-xs text-gray-400">Last 20 runs</span>
         </div>
-      )}
+
+        {logsLoading ? (
+          <div className="p-8 text-center text-gray-400 text-sm">Loading…</div>
+        ) : logs.length === 0 ? (
+          <div className="p-8 text-center text-gray-400 text-sm">No syncs run yet.</div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {logs.map((log) => (
+              <div key={log.id} className="px-5 py-4">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                    log.status === "ok" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                  }`}>
+                    {log.status === "ok" ? (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    )}
+                    {log.status === "ok" ? "Success" : "Failed"}
+                  </span>
+                  <span className="text-sm text-gray-700">
+                    {new Date(log.ran_at + "Z").toLocaleString()}
+                  </span>
+                  {log.duration_ms != null && (
+                    <span className="text-xs text-gray-400 ml-auto">{fmt(log.duration_ms)}</span>
+                  )}
+                </div>
+
+                {log.status === "ok" ? (
+                  <div className="flex flex-wrap gap-4">
+                    {([
+                      ["Students", log.students],
+                      ["Teachers", log.teachers],
+                      ["Classes", log.classes],
+                      ["Enrollments", log.enrollments],
+                      ["Teacher links", log.teacher_assignments],
+                    ] as [string, number | null][]).map(([label, val]) => (
+                      <div key={label} className="text-center">
+                        <div className="text-lg font-bold text-gray-900">{val ?? "—"}</div>
+                        <div className="text-xs text-gray-400">{label}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-red-600 font-mono bg-red-50 rounded-lg px-3 py-2 mt-1">
+                    {log.error_message}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

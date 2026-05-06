@@ -627,13 +627,32 @@ app.post("/api/admin/sync", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
+  const start = Date.now();
   try {
     const result = await syncVeracross();
+    const duration = Date.now() - start;
+    await db.prepare(
+      `INSERT INTO sync_logs (id, status, students, teachers, classes, enrollments, teacher_assignments, duration_ms)
+       VALUES (?1, 'ok', ?2, ?3, ?4, ?5, ?6, ?7)`
+    ).bind(crypto.randomUUID(), result.students, result.teachers, result.classes, result.enrollments, result.teacherAssignments, duration).run();
     return c.json({ ok: true, ...result });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed";
+    await db.prepare(
+      `INSERT INTO sync_logs (id, status, error_message, duration_ms) VALUES (?1, 'error', ?2, ?3)`
+    ).bind(crypto.randomUUID(), message, Date.now() - start).run();
     return c.json({ error: message }, 500);
   }
+});
+
+app.get("/api/admin/sync/logs", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  const logs = await db.prepare(
+    `SELECT id, ran_at, status, students, teachers, classes, enrollments, teacher_assignments, error_message, duration_ms
+     FROM sync_logs ORDER BY ran_at DESC LIMIT 20`
+  ).all<{ id: string; ran_at: string; status: string; students: number; teachers: number; classes: number; enrollments: number; teacher_assignments: number; error_message: string | null; duration_ms: number }>();
+  return c.json(logs.results ?? []);
 });
 
 app.get("/api/admin/classes/:classId/results/:windowId", async (c) => {

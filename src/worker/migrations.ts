@@ -1,5 +1,22 @@
 import { migrate, db } from "flingit";
 
+migrate("003_sync_logs", async () => {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS sync_logs (
+      id TEXT PRIMARY KEY,
+      ran_at TEXT DEFAULT (datetime('now')),
+      status TEXT NOT NULL,
+      students INTEGER,
+      teachers INTEGER,
+      classes INTEGER,
+      enrollments INTEGER,
+      teacher_assignments INTEGER,
+      error_message TEXT,
+      duration_ms INTEGER
+    )
+  `).run();
+});
+
 migrate("002_classes_teacher_fields", async () => {
   // Add teacher info columns to classes (safe if already exists)
   try {
