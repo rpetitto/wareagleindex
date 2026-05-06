@@ -68,12 +68,12 @@ async function getVCToken(): Promise<string> {
   return data.access_token;
 }
 
-async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
+async function vcGet<T>(base: string, path: string, token: string, maxPages = 10): Promise<T[]> {
   const PAGE_SIZE = 1000;
   const all: T[] = [];
   let page = 1;
 
-  while (true) {
+  while (page <= maxPages) {
     const res = await fetch(`${base}/${path}`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -175,7 +175,8 @@ export async function syncVeracross(): Promise<SyncResult> {
   const allEnrollments = await vcGet<VCEnrollment>(
     base,
     "academics/enrollments?currently_enrolled=true&class_status=active",
-    token
+    token,
+    1  // one page of 1000 is sufficient; avoids slow multi-page iteration on this endpoint
   );
   const activeEnrollments = allEnrollments.filter(
     (e) =>
