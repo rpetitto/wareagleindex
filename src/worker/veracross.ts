@@ -174,7 +174,7 @@ export async function syncVeracross(): Promise<SyncResult> {
   // ── 4. All enrollments in one paginated request ───────────────────────────
   const allEnrollments = await vcGet<VCEnrollment>(
     base,
-    "academics/enrollments?currently_enrolled=true",
+    "academics/enrollments?currently_enrolled=true&class_status=active",
     token
   );
   const activeEnrollments = allEnrollments.filter(
