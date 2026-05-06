@@ -93,6 +93,13 @@ async function vcGet<T>(base: string, path: string, token: string): Promise<T[]>
   return all;
 }
 
+// Execute prepared statements in batches to avoid D1 per-request limits
+async function batchRun(stmts: ReturnType<typeof db.prepare>[], size = 100) {
+  for (let i = 0; i < stmts.length; i += size) {
+    await db.batch(stmts.slice(i, i + size));
+  }
+}
+
 export interface SyncResult {
   students: number;
   teachers: number;
@@ -111,20 +118,20 @@ export async function syncVeracross(): Promise<SyncResult> {
   const photoByPersonId = new Map<number, string>();
   for (const p of photos) photoByPersonId.set(p.person_id, p.download_url);
 
-  // ── 2. Faculty ────────────────────────────────────────────────────────────
+  // ── 2. Faculty — batch upsert ─────────────────────────────────────────────
   const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
   const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
 
-  for (const f of faculty) {
+  const facultyStmts = faculty.flatMap((f) => {
     const email = (f.email_1 || f.username || "").toLowerCase().trim();
-    if (!email) continue;
+    if (!email) return [];
     const name = f.preferred_name
       ? `${f.preferred_name} ${f.last_name}`.trim()
       : `${f.first_name} ${f.last_name}`.trim();
     const vcId = String(f.id);
     const photo = photoByPersonId.get(f.id) ?? null;
-    await db
-      .prepare(
+    return [
+      db.prepare(
         `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
          VALUES (?1, ?2, ?3, ?4, 'teacher', ?5, ?6)
          ON CONFLICT(email) DO UPDATE SET
@@ -133,24 +140,24 @@ export async function syncVeracross(): Promise<SyncResult> {
            role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'teacher' END,
            picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
            updated_at = datetime('now')`
-      )
-      .bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo)
-      .run();
-  }
+      ).bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo),
+    ];
+  });
+  await batchRun(facultyStmts);
 
-  // ── 3. Students ───────────────────────────────────────────────────────────
+  // ── 3. Students — batch upsert ────────────────────────────────────────────
   const students = await vcGet<VCStudent>(base, "students", token);
 
-  for (const s of students) {
+  const studentStmts = students.flatMap((s) => {
     const email = (s.email_1 || s.username || "").toLowerCase().trim();
-    if (!email) continue;
+    if (!email) return [];
     const name = s.preferred_name
       ? `${s.preferred_name} ${s.last_name}`.trim()
       : `${s.first_name} ${s.last_name}`.trim();
     const vcId = String(s.id);
     const photo = photoByPersonId.get(s.id) ?? null;
-    await db
-      .prepare(
+    return [
+      db.prepare(
         `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
          VALUES (?1, ?2, ?3, ?4, 'student', ?5, ?6)
          ON CONFLICT(email) DO UPDATE SET
@@ -159,19 +166,17 @@ export async function syncVeracross(): Promise<SyncResult> {
            picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
            updated_at = datetime('now')
          WHERE role != 'admin'`
-      )
-      .bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo)
-      .run();
-  }
+      ).bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo),
+    ];
+  });
+  await batchRun(studentStmts);
 
-  // ── 4. All enrollments in ONE request (no per-student loops) ─────────────
-  // Filter at the API level: currently enrolled, appears on transcript.
+  // ── 4. All enrollments in one paginated request ───────────────────────────
   const allEnrollments = await vcGet<VCEnrollment>(
     base,
     "academics/enrollments?currently_enrolled=true&exclude_from_transcript=false",
     token
   );
-  // Also filter client-side to exclude future classes and confirm conditions.
   const activeEnrollments = allEnrollments.filter(
     (e) =>
       e.currently_enrolled &&
@@ -179,7 +184,7 @@ export async function syncVeracross(): Promise<SyncResult> {
       String(e.class_status).toLowerCase() !== "future"
   );
 
-  // ── 5. Collect unique classes from enrollment data ────────────────────────
+  // ── 5. Collect unique classes ─────────────────────────────────────────────
   interface ClassInfo {
     vcId: string;
     name: string;
@@ -207,23 +212,21 @@ export async function syncVeracross(): Promise<SyncResult> {
     });
   }
 
-  // ── 6. Upsert all classes ─────────────────────────────────────────────────
-  for (const cls of classMap.values()) {
-    await db
-      .prepare(
-        `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(veracross_id) DO UPDATE SET
-           name = excluded.name,
-           grade_level = excluded.grade_level,
-           primary_teacher_vc_id = excluded.primary_teacher_vc_id,
-           primary_teacher_name = excluded.primary_teacher_name`
-      )
-      .bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
-      .run();
-  }
+  // ── 6. Batch upsert classes ───────────────────────────────────────────────
+  const classStmts = [...classMap.values()].map((cls) =>
+    db.prepare(
+      `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT(veracross_id) DO UPDATE SET
+         name = excluded.name,
+         grade_level = excluded.grade_level,
+         primary_teacher_vc_id = excluded.primary_teacher_vc_id,
+         primary_teacher_name = excluded.primary_teacher_name`
+    ).bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
+  );
+  await batchRun(classStmts);
 
-  // ── 7. Build in-memory lookup maps from DB (two queries total) ────────────
+  // ── 7. Build lookup maps ──────────────────────────────────────────────────
   const userRows = await db
     .prepare(`SELECT id, veracross_id FROM users WHERE veracross_id IS NOT NULL`)
     .all<{ id: string; veracross_id: string }>();
@@ -236,20 +239,20 @@ export async function syncVeracross(): Promise<SyncResult> {
   const classIdByVcId = new Map<string, string>();
   for (const c of classRows.results ?? []) classIdByVcId.set(c.veracross_id, c.id);
 
-  // ── 8. Insert enrollment links ────────────────────────────────────────────
-  let enrollCount = 0;
+  // ── 8. Batch insert enrollment links ──────────────────────────────────────
+  const enrollStmts: ReturnType<typeof db.prepare>[] = [];
   for (const e of activeEnrollments) {
     const studentUserId = userIdByVcId.get(String(e.person_id));
     const classId = classIdByVcId.get(String(e.internal_class_id));
     if (!studentUserId || !classId) continue;
-    await db
-      .prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
-      .bind(crypto.randomUUID(), studentUserId, classId)
-      .run();
-    enrollCount++;
+    enrollStmts.push(
+      db.prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
+        .bind(crypto.randomUUID(), studentUserId, classId)
+    );
   }
+  await batchRun(enrollStmts);
 
-  // ── 9. Link teachers to classes (one join query + inserts) ────────────────
+  // ── 9. Batch link teachers to classes ─────────────────────────────────────
   const teacherLinks = await db
     .prepare(
       `SELECT c.id AS class_id, u.id AS teacher_id
@@ -259,20 +262,17 @@ export async function syncVeracross(): Promise<SyncResult> {
     )
     .all<{ class_id: string; teacher_id: string }>();
 
-  let teacherCount = 0;
-  for (const link of teacherLinks.results ?? []) {
-    await db
-      .prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
+  const teacherStmts = (teacherLinks.results ?? []).map((link) =>
+    db.prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
       .bind(crypto.randomUUID(), link.teacher_id, link.class_id)
-      .run();
-    teacherCount++;
-  }
+  );
+  await batchRun(teacherStmts);
 
   return {
     students: students.length,
     teachers: faculty.length,
     classes: classMap.size,
-    enrollments: enrollCount,
-    teacherAssignments: teacherCount,
+    enrollments: enrollStmts.length,
+    teacherAssignments: teacherStmts.length,
   };
 }

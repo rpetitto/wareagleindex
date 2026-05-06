@@ -428,22 +428,33 @@ function SyncPage() {
   const [logsLoading, setLogsLoading] = useState(true);
 
   function loadLogs() {
-    setLogsLoading(true);
-    fetch("/api/admin/sync/logs")
+    return fetch("/api/admin/sync/logs")
       .then((r) => r.json())
       .then((d) => { setLogs(d as SyncLog[]); setLogsLoading(false); })
       .catch(() => setLogsLoading(false));
   }
 
-  useEffect(loadLogs, []);
+  // Poll every 3s while a 'running' entry exists
+  useEffect(() => {
+    loadLogs();
+    const id = setInterval(() => {
+      fetch("/api/admin/sync/logs")
+        .then((r) => r.json())
+        .then((d) => {
+          const rows = d as SyncLog[];
+          setLogs(rows);
+          setLogsLoading(false);
+          const running = rows.some((r) => r.status === "running");
+          setSyncing(running);
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   async function runSync() {
     setSyncing(true);
-    try {
-      await fetch("/api/admin/sync", { method: "POST" });
-    } catch { /* error is recorded server-side */ }
-    setSyncing(false);
-    loadLogs();
+    await fetch("/api/admin/sync", { method: "POST" }).catch(() => {});
   }
 
   function fmt(ms: number | null) {
@@ -502,18 +513,25 @@ function SyncPage() {
               <div key={log.id} className="px-5 py-4">
                 <div className="flex items-center gap-3 mb-2">
                   <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    log.status === "ok" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                    log.status === "ok" ? "bg-green-100 text-green-700"
+                    : log.status === "running" ? "bg-yellow-100 text-yellow-700"
+                    : "bg-red-100 text-red-700"
                   }`}>
                     {log.status === "ok" ? (
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : log.status === "running" ? (
+                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                     ) : (
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     )}
-                    {log.status === "ok" ? "Success" : "Failed"}
+                    {log.status === "ok" ? "Success" : log.status === "running" ? "Running…" : "Failed"}
                   </span>
                   <span className="text-sm text-gray-700">
                     {new Date(log.ran_at + "Z").toLocaleString()}

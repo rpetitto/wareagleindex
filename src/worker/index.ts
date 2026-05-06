@@ -628,22 +628,40 @@ app.post("/api/admin/sync", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
+  // Prevent concurrent syncs
+  const alreadyRunning = await db
+    .prepare(`SELECT id FROM sync_logs WHERE status = 'running' LIMIT 1`)
+    .first<{ id: string }>();
+  if (alreadyRunning) return c.json({ error: "Sync already in progress" }, 409);
+
+  const logId = crypto.randomUUID();
+  await db
+    .prepare(`INSERT INTO sync_logs (id, status) VALUES (?1, 'running')`)
+    .bind(logId)
+    .run();
+
   const start = Date.now();
-  try {
-    const result = await syncVeracross();
-    const duration = Date.now() - start;
-    await db.prepare(
-      `INSERT INTO sync_logs (id, status, students, teachers, classes, enrollments, teacher_assignments, duration_ms)
-       VALUES (?1, 'ok', ?2, ?3, ?4, ?5, ?6, ?7)`
-    ).bind(crypto.randomUUID(), result.students, result.teachers, result.classes, result.enrollments, result.teacherAssignments, duration).run();
-    return c.json({ ok: true, ...result });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Sync failed";
-    await db.prepare(
-      `INSERT INTO sync_logs (id, status, error_message, duration_ms) VALUES (?1, 'error', ?2, ?3)`
-    ).bind(crypto.randomUUID(), message, Date.now() - start).run();
-    return c.json({ error: message }, 500);
-  }
+  c.executionCtx.waitUntil(
+    syncVeracross()
+      .then((result) =>
+        db
+          .prepare(
+            `UPDATE sync_logs SET status='ok', students=?1, teachers=?2, classes=?3,
+             enrollments=?4, teacher_assignments=?5, duration_ms=?6 WHERE id=?7`
+          )
+          .bind(result.students, result.teachers, result.classes, result.enrollments, result.teacherAssignments, Date.now() - start, logId)
+          .run()
+      )
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : "Sync failed";
+        return db
+          .prepare(`UPDATE sync_logs SET status='error', error_message=?1, duration_ms=?2 WHERE id=?3`)
+          .bind(message, Date.now() - start, logId)
+          .run();
+      })
+  );
+
+  return c.json({ ok: true });
 });
 
 app.get("/api/admin/sync/logs", async (c) => {
