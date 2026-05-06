@@ -68,18 +68,38 @@ async function getVCToken(): Promise<string> {
 }
 
 async function vcGet<T>(base: string, path: string, token: string): Promise<T[]> {
-  // Paginate automatically — Veracross v3 defaults to 100 records per page
   const PAGE_SIZE = 100;
-  const all: T[] = [];
-  let page = 1;
+  const headers = { Authorization: `Bearer ${token}` };
 
-  while (true) {
-    const separator = path.includes("?") ? "&" : "?";
-    const url = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=${page}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  // Try first page with pagination params; if the endpoint rejects them (400),
+  // fall back to a plain fetch and return whatever the API gives us.
+  const separator = path.includes("?") ? "&" : "?";
+  const firstUrl = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=1`;
+  const firstRes = await fetch(firstUrl, { headers });
+
+  if (firstRes.status === 400) {
+    // Endpoint doesn't support pagination params — fetch without them
+    const res = await fetch(`${base}/${path}`, { headers });
     if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
     const json = (await res.json()) as { data?: T[]; error?: string };
     if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
+    return json.data ?? [];
+  }
+
+  if (!firstRes.ok) throw new Error(`Veracross API ${firstRes.status}: /${path}`);
+  const firstJson = (await firstRes.json()) as { data?: T[]; error?: string };
+  if (firstJson.error) throw new Error(`Veracross /${path}: ${firstJson.error}`);
+
+  const all: T[] = [...(firstJson.data ?? [])];
+  if (all.length < PAGE_SIZE) return all;
+
+  // Keep paging until we get a partial page
+  let page = 2;
+  while (true) {
+    const url = `${base}/${path}${separator}page[size]=${PAGE_SIZE}&page[number]=${page}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok || res.status === 400) break;
+    const json = (await res.json()) as { data?: T[]; error?: string };
     const records = json.data ?? [];
     all.push(...records);
     if (records.length < PAGE_SIZE) break;
