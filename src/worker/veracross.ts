@@ -32,12 +32,39 @@ interface VCEnrollment {
   exclude_from_transcript?: boolean | null;
   grade_level_id: number;
   person_id: number;
+  date_withdrawn?: string | null;
   primary_teacher?: {
     id: number;
     first_name: string;
     last_name: string;
     preferred_name?: string | null;
   } | null;
+}
+
+// Patterns identifying non-academic classes that shouldn't be surveyed.
+// Matched (case-insensitive) against class_description; tweak as needed.
+const NON_ACADEMIC_PATTERNS: RegExp[] = [
+  /\bhomeroom\b/i,
+  /\badvisory\b/i,
+  /\br[-\s]?period\b/i,
+  /\bstudy\s+hall\b/i,
+  /\bfree\s+period\b/i,
+  /\blunch\b/i,
+  /\bchapel\b/i,
+  /\bassembly\b/i,
+  /\bactivity\s+period\b/i,
+  /^class of \d+/i, // "Class of 2027", "Class of 2028", etc.
+];
+
+function isNonAcademic(name: string): boolean {
+  return NON_ACADEMIC_PATTERNS.some((rx) => rx.test(name));
+}
+
+function isWithdrawn(dateWithdrawn: string | null | undefined): boolean {
+  if (!dateWithdrawn) return false;
+  const t = Date.parse(dateWithdrawn);
+  if (isNaN(t)) return false;
+  return t < Date.now();
 }
 
 interface VCPhoto {
@@ -240,7 +267,9 @@ workflow("veracross-sync", {
       (e) =>
         e.currently_enrolled &&
         e.exclude_from_transcript !== true &&
-        String(e.class_status).toLowerCase() !== "future"
+        String(e.class_status).toLowerCase() !== "future" &&
+        !isWithdrawn(e.date_withdrawn) &&
+        !isNonAcademic(e.class_description ?? "")
     );
 
     interface ClassInfo {
