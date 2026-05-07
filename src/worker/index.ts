@@ -184,14 +184,21 @@ app.post("/api/student/respond/engagement", async (c) => {
   if (challenge < 1 || challenge > 10 || love < 1 || love > 10)
     return c.json({ error: "Values must be 1–10" }, 400);
 
+  const classInfo = await db
+    .prepare(`SELECT name, primary_teacher_name FROM classes WHERE id = ?1`)
+    .bind(classId)
+    .first<{ name: string; primary_teacher_name: string | null }>();
+
   await db
     .prepare(
-      `INSERT INTO engagement_responses (id, student_id, class_id, survey_window_id, challenge, love)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `INSERT INTO engagement_responses (id, student_id, class_id, survey_window_id, challenge, love, class_name, teacher_name, student_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
        ON CONFLICT(student_id, class_id, survey_window_id) DO UPDATE SET
-         challenge = excluded.challenge, love = excluded.love, submitted_at = datetime('now')`
+         challenge = excluded.challenge, love = excluded.love, submitted_at = datetime('now'),
+         class_name = excluded.class_name, teacher_name = excluded.teacher_name, student_name = excluded.student_name`
     )
-    .bind(crypto.randomUUID(), user.id, classId, surveyWindowId, challenge, love)
+    .bind(crypto.randomUUID(), user.id, classId, surveyWindowId, challenge, love,
+      classInfo?.name ?? null, classInfo?.primary_teacher_name ?? null, user.name)
     .run();
 
   return c.json({ ok: true });
@@ -211,14 +218,21 @@ app.post("/api/student/respond/mattering", async (c) => {
   if (connection < 1 || connection > 5 || contribution < 1 || contribution > 5)
     return c.json({ error: "Values must be 1–5" }, 400);
 
+  const classInfo = await db
+    .prepare(`SELECT name, primary_teacher_name FROM classes WHERE id = ?1`)
+    .bind(classId)
+    .first<{ name: string; primary_teacher_name: string | null }>();
+
   await db
     .prepare(
-      `INSERT INTO mattering_responses (id, student_id, class_id, survey_window_id, connection, contribution)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      `INSERT INTO mattering_responses (id, student_id, class_id, survey_window_id, connection, contribution, class_name, teacher_name, student_name)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
        ON CONFLICT(student_id, class_id, survey_window_id) DO UPDATE SET
-         connection = excluded.connection, contribution = excluded.contribution, submitted_at = datetime('now')`
+         connection = excluded.connection, contribution = excluded.contribution, submitted_at = datetime('now'),
+         class_name = excluded.class_name, teacher_name = excluded.teacher_name, student_name = excluded.student_name`
     )
-    .bind(crypto.randomUUID(), user.id, classId, surveyWindowId, connection, contribution)
+    .bind(crypto.randomUUID(), user.id, classId, surveyWindowId, connection, contribution,
+      classInfo?.name ?? null, classInfo?.primary_teacher_name ?? null, user.name)
     .run();
 
   return c.json({ ok: true });
@@ -251,6 +265,11 @@ app.post("/api/student/respond/dimensions", async (c) => {
     instructional_comments: string;
   }>();
 
+  const dimClassInfo = await db
+    .prepare(`SELECT name, primary_teacher_name FROM classes WHERE id = ?1`)
+    .bind(body.classId)
+    .first<{ name: string; primary_teacher_name: string | null }>();
+
   await db
     .prepare(
       `INSERT INTO dimension_responses (
@@ -259,8 +278,9 @@ app.post("/api/student/respond/dimensions", async (c) => {
          cognitive_clarity, cognitive_expectations, cognitive_feedback, cognitive_challenge,
          emotional_known, emotional_cared, emotional_motivated, emotional_enjoyment,
          instructional_activities, instructional_collaboration, instructional_assignments,
-         behavioral_comments, cognitive_comments, emotional_comments, instructional_comments
-       ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+         behavioral_comments, cognitive_comments, emotional_comments, instructional_comments,
+         class_name, teacher_name, student_name
+       ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)
        ON CONFLICT(student_id, class_id, survey_window_id) DO UPDATE SET
          behavioral_effort=excluded.behavioral_effort, behavioral_focus=excluded.behavioral_focus,
          behavioral_respect=excluded.behavioral_respect, cognitive_clarity=excluded.cognitive_clarity,
@@ -272,6 +292,7 @@ app.post("/api/student/respond/dimensions", async (c) => {
          instructional_assignments=excluded.instructional_assignments,
          behavioral_comments=excluded.behavioral_comments, cognitive_comments=excluded.cognitive_comments,
          emotional_comments=excluded.emotional_comments, instructional_comments=excluded.instructional_comments,
+         class_name=excluded.class_name, teacher_name=excluded.teacher_name, student_name=excluded.student_name,
          submitted_at=datetime('now')`
     )
     .bind(
@@ -281,7 +302,8 @@ app.post("/api/student/respond/dimensions", async (c) => {
       body.emotional_known, body.emotional_cared, body.emotional_motivated, body.emotional_enjoyment,
       body.instructional_activities, body.instructional_collaboration, body.instructional_assignments,
       body.behavioral_comments || "", body.cognitive_comments || "",
-      body.emotional_comments || "", body.instructional_comments || ""
+      body.emotional_comments || "", body.instructional_comments || "",
+      dimClassInfo?.name ?? null, dimClassInfo?.primary_teacher_name ?? null, user.name
     )
     .run();
 
@@ -298,12 +320,12 @@ app.get("/api/teacher/classes", async (c) => {
 
   const classes = await db
     .prepare(
-      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term
+      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term, c.veracross_id
        FROM teacher_classes tc JOIN classes c ON c.id = tc.class_id
        WHERE tc.teacher_id = ?1 ORDER BY c.name`
     )
     .bind(user.id)
-    .all<{ id: string; name: string; subject: string | null; grade_level: string | null; school_year: string | null; term: string | null }>();
+    .all<{ id: string; name: string; subject: string | null; grade_level: string | null; school_year: string | null; term: string | null; veracross_id: string | null }>();
 
   // For each class, get active windows and response counts
   const result = [];
@@ -728,7 +750,7 @@ app.get("/api/admin/classes", async (c) => {
 
   const rows = await db
     .prepare(
-      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term,
+      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term, c.veracross_id, c.begin_date, c.end_date,
               COUNT(DISTINCT e.student_id) as student_count,
               COUNT(DISTINCT tc.teacher_id) as teacher_count
        FROM classes c

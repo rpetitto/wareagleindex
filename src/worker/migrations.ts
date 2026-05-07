@@ -1,5 +1,20 @@
 import { migrate, db } from "flingit";
 
+migrate("007_response_snapshots", async () => {
+  // engagement_responses
+  try { await db.prepare(`ALTER TABLE engagement_responses ADD COLUMN class_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE engagement_responses ADD COLUMN teacher_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE engagement_responses ADD COLUMN student_name TEXT`).run(); } catch { /* exists */ }
+  // mattering_responses
+  try { await db.prepare(`ALTER TABLE mattering_responses ADD COLUMN class_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE mattering_responses ADD COLUMN teacher_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE mattering_responses ADD COLUMN student_name TEXT`).run(); } catch { /* exists */ }
+  // dimension_responses
+  try { await db.prepare(`ALTER TABLE dimension_responses ADD COLUMN class_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE dimension_responses ADD COLUMN teacher_name TEXT`).run(); } catch { /* exists */ }
+  try { await db.prepare(`ALTER TABLE dimension_responses ADD COLUMN student_name TEXT`).run(); } catch { /* exists */ }
+});
+
 migrate("003_sync_logs", async () => {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS sync_logs (
