@@ -33,6 +33,7 @@ interface VCEnrollment {
   grade_level_id: number;
   person_id: number;
   date_withdrawn?: string | null;
+  course_type?: number | null;
   primary_teacher?: {
     id: number;
     first_name: string;
@@ -339,13 +340,16 @@ workflow("veracross-sync", {
       token
     );
 
+    // course_type 3 = Academic, 4 = Non-Academic (per Veracross standard types)
+    const ALLOWED_COURSE_TYPES = new Set([3, 4]);
     const activeEnrollments = allEnrollments.filter(
       (e) =>
         e.currently_enrolled &&
         e.exclude_from_transcript !== true &&
         String(e.class_status).toLowerCase() !== "future" &&
         !isWithdrawn(e.date_withdrawn) &&
-        !isNonAcademic(e.class_description ?? "")
+        !isNonAcademic(e.class_description ?? "") &&
+        (e.course_type == null || ALLOWED_COURSE_TYPES.has(e.course_type))
     );
 
     interface ClassInfo {
