@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Routes, Route, Link, useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
 import QuadrantScatter from "../components/QuadrantScatter";
+import SlideOver from "../components/SlideOver";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 
@@ -309,6 +310,7 @@ function UsersPage() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
   function load(s: string, r: string) {
     setLoading(true);
@@ -386,9 +388,12 @@ function UsersPage() {
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <Link to={`/admin/users/${u.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+              <button
+                onClick={() => setSelectedUserId(u.id)}
+                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block text-left w-full"
+              >
                 {u.name}
-              </Link>
+              </button>
               <p className="text-xs text-gray-400 truncate">{u.email}</p>
             </div>
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${ROLE_COLORS[u.role] ?? "bg-gray-100"}`}>
@@ -406,6 +411,12 @@ function UsersPage() {
           </div>
         ))}
       </div>
+
+      <SlideOver open={selectedUserId != null} onClose={() => setSelectedUserId(null)}>
+        {selectedUserId && (
+          <UserProfileContent userId={selectedUserId} onClose={() => setSelectedUserId(null)} />
+        )}
+      </SlideOver>
     </div>
   );
 }
@@ -788,8 +799,7 @@ function ResponseSummary({ r }: { r: UserResponse }) {
   );
 }
 
-function UserProfilePage() {
-  const { userId } = useParams<{ userId: string }>();
+function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () => void }) {
   const navigate = useNavigate();
   const [data, setData] = useState<UserProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -810,15 +820,17 @@ function UserProfilePage() {
 
   return (
     <div>
-      <button
-        onClick={() => navigate("/admin/users")}
-        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
-        Back to Users
-      </button>
+      {!onClose && (
+        <button
+          onClick={() => navigate("/admin/users")}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to Users
+        </button>
+      )}
 
       {/* Header */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6 flex items-center gap-4">
@@ -935,6 +947,11 @@ function UserProfilePage() {
   );
 }
 
+function UserProfilePage() {
+  const { userId } = useParams<{ userId: string }>();
+  return <UserProfileContent userId={userId!} />;
+}
+
 // ─── Admin Classes ────────────────────────────────────────────────────────────
 
 interface AdminClass {
@@ -955,6 +972,7 @@ function AdminClassesPage() {
   const [classes, setClasses] = useState<AdminClass[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/classes")
@@ -990,9 +1008,12 @@ function AdminClassesPage() {
             className={`flex items-center gap-3 px-4 py-3 ${i < filtered.length - 1 ? "border-b border-gray-50" : ""}`}
           >
             <div className="flex-1 min-w-0">
-              <Link to={`/admin/classes/${cls.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+              <button
+                onClick={() => setSelectedClassId(cls.id)}
+                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block text-left w-full"
+              >
                 {cls.name}
-              </Link>
+              </button>
               <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
                 {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
                 {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
@@ -1005,6 +1026,12 @@ function AdminClassesPage() {
           </div>
         ))}
       </div>
+
+      <SlideOver open={selectedClassId != null} onClose={() => setSelectedClassId(null)}>
+        {selectedClassId && (
+          <AdminClassDetailContent classId={selectedClassId} onClose={() => setSelectedClassId(null)} />
+        )}
+      </SlideOver>
     </div>
   );
 }
@@ -1134,8 +1161,7 @@ function AggSection({
   );
 }
 
-function AdminClassDetailPage() {
-  const { classId } = useParams<{ classId: string }>();
+function AdminClassDetailContent({ classId, onClose }: { classId: string; onClose?: () => void }) {
   const navigate = useNavigate();
   const [data, setData] = useState<AggregateData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1155,15 +1181,17 @@ function AdminClassDetailPage() {
 
   return (
     <div>
-      <button
-        onClick={() => navigate("/admin/classes")}
-        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
-      >
-        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
-        Back to Classes
-      </button>
+      {!onClose && (
+        <button
+          onClick={() => navigate("/admin/classes")}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to Classes
+        </button>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6">
         <h2 className="text-xl font-bold text-gray-900">{cls.name}</h2>
@@ -1208,6 +1236,11 @@ function AdminClassDetailPage() {
       </div>
     </div>
   );
+}
+
+function AdminClassDetailPage() {
+  const { classId } = useParams<{ classId: string }>();
+  return <AdminClassDetailContent classId={classId!} />;
 }
 
 // ─── Shell ────────────────────────────────────────────────────────────────────

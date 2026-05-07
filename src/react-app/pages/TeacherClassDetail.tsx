@@ -139,8 +139,8 @@ function AggSection({
   );
 }
 
-export default function TeacherClassDetail() {
-  const { classId } = useParams<{ classId: string }>();
+// Reusable content — works both as a full page and inside a SlideOver.
+export function TeacherClassDetailContent({ classId, onClose }: { classId: string; onClose?: () => void }) {
   const navigate = useNavigate();
   const [data, setData] = useState<AggregateData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -153,28 +153,18 @@ export default function TeacherClassDetail() {
       .catch(() => setLoading(false));
   }, [classId]);
 
-  if (loading) return (
-    <div className="min-h-screen bg-warm">
-      <NavBar />
-      <div className="text-center text-gray-400 py-12">Loading…</div>
-    </div>
-  );
+  const handleBack = onClose ?? (() => navigate("/teacher"));
 
-  if (!data) return (
-    <div className="min-h-screen bg-warm">
-      <NavBar />
-      <div className="text-center text-gray-400 py-12">Class not found.</div>
-    </div>
-  );
+  if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
+  if (!data) return <div className="text-center text-gray-400 py-12">Class not found.</div>;
 
   const { cls, latest_window, school_year, lifetime_course } = data;
 
   return (
-    <div className="min-h-screen bg-warm">
-      <NavBar />
-      <div className="max-w-3xl mx-auto px-4 py-8">
+    <div>
+      {!onClose && (
         <button
-          onClick={() => navigate("/teacher")}
+          onClick={handleBack}
           className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -182,69 +172,78 @@ export default function TeacherClassDetail() {
           </svg>
           Back to My Classes
         </button>
+      )}
 
-        {/* Class header card */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6">
-          <h1 className="text-xl font-bold text-gray-900">{cls.name}</h1>
-          <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
-            {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
-            {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
-            <span>· {cls.studentCount} students</span>
-            {cls.primary_teacher_name && <span>· {cls.primary_teacher_name}</span>}
+      {/* Class header card */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6">
+        <h1 className="text-xl font-bold text-gray-900">{cls.name}</h1>
+        <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
+          {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
+          {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+          <span>· {cls.studentCount} students</span>
+          {cls.primary_teacher_name && <span>· {cls.primary_teacher_name}</span>}
+        </div>
+        {cls.begin_date && cls.end_date && (
+          <p className="text-xs text-gray-400 mt-1">
+            {new Date(cls.begin_date).toLocaleDateString()} – {new Date(cls.end_date).toLocaleDateString()}
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <AggSection
+          title="Latest Survey"
+          subtitle={latest_window ? `${latest_window.window.name} · ${new Date(latest_window.window.opens_at).toLocaleDateString()}` : undefined}
+          ei={latest_window?.ei}
+          mi={latest_window?.mi}
+          eiPoints={latest_window?.ei_points}
+          responseCount={latest_window ? ((latest_window.ei?.cnt ?? 0) + (latest_window.mi?.cnt ?? 0)) : undefined}
+        />
+
+        <AggSection
+          title="This School Year"
+          subtitle={cls.begin_date ? `Since ${new Date(cls.begin_date).toLocaleDateString()}` : "Last 12 months"}
+          ei={school_year.ei}
+          mi={school_year.mi}
+          eiPoints={school_year.ei_points}
+          windowCount={school_year.window_count}
+        />
+
+        <AggSection
+          title={`Lifetime — ${cls.name}`}
+          subtitle={`Across ${lifetime_course.class_count} section${lifetime_course.class_count !== 1 ? "s" : ""} you have taught`}
+          ei={lifetime_course.ei}
+          mi={lifetime_course.mi}
+          eiPoints={lifetime_course.ei_points}
+        />
+
+        {latest_window && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h3 className="font-semibold text-gray-900 mb-3">Survey Results</h3>
+            <Link
+              to={`/teacher/class/${cls.id}/window/${latest_window.window.id}`}
+              className="flex items-center justify-between py-2 text-sm text-gray-700 hover:text-crimson transition-colors group"
+            >
+              <span>{latest_window.window.name}</span>
+              <svg className="w-4 h-4 text-gray-300 group-hover:text-crimson" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </Link>
           </div>
-          {cls.begin_date && cls.end_date && (
-            <p className="text-xs text-gray-400 mt-1">
-              {new Date(cls.begin_date).toLocaleDateString()} – {new Date(cls.end_date).toLocaleDateString()}
-            </p>
-          )}
-        </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-        <div className="space-y-4">
-          {/* Latest Survey */}
-          <AggSection
-            title="Latest Survey"
-            subtitle={latest_window ? `${latest_window.window.name} · ${new Date(latest_window.window.opens_at).toLocaleDateString()}` : undefined}
-            ei={latest_window?.ei}
-            mi={latest_window?.mi}
-            eiPoints={latest_window?.ei_points}
-            responseCount={latest_window ? ((latest_window.ei?.cnt ?? 0) + (latest_window.mi?.cnt ?? 0)) : undefined}
-          />
-
-          {/* School Year */}
-          <AggSection
-            title="This School Year"
-            subtitle={cls.begin_date ? `Since ${new Date(cls.begin_date).toLocaleDateString()}` : "Last 12 months"}
-            ei={school_year.ei}
-            mi={school_year.mi}
-            eiPoints={school_year.ei_points}
-            windowCount={school_year.window_count}
-          />
-
-          {/* Lifetime course */}
-          <AggSection
-            title={`Lifetime — ${cls.name}`}
-            subtitle={`Across ${lifetime_course.class_count} section${lifetime_course.class_count !== 1 ? "s" : ""} you have taught`}
-            ei={lifetime_course.ei}
-            mi={lifetime_course.mi}
-            eiPoints={lifetime_course.ei_points}
-          />
-
-          {/* Link to past survey windows */}
-          {latest_window && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-              <h3 className="font-semibold text-gray-900 mb-3">Survey Results</h3>
-              <Link
-                to={`/teacher/class/${cls.id}/window/${latest_window.window.id}`}
-                className="flex items-center justify-between py-2 text-sm text-gray-700 hover:text-crimson transition-colors group"
-              >
-                <span>{latest_window.window.name}</span>
-                <svg className="w-4 h-4 text-gray-300 group-hover:text-crimson" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </Link>
-            </div>
-          )}
-        </div>
+// Full-page route wrapper
+export default function TeacherClassDetail() {
+  const { classId } = useParams<{ classId: string }>();
+  return (
+    <div className="min-h-screen bg-warm">
+      <NavBar />
+      <div className="max-w-3xl mx-auto px-4 py-8">
+        <TeacherClassDetailContent classId={classId!} />
       </div>
     </div>
   );

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import NavBar from "../components/NavBar";
+import SlideOver from "../components/SlideOver";
+import { TeacherClassDetailContent } from "./TeacherClassDetail";
 
 interface ClassWindow {
   id: string;
@@ -42,6 +44,7 @@ function isActive(w: ClassWindow) {
 export default function TeacherDashboard() {
   const [classes, setClasses] = useState<TeacherClass[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/teacher/classes")
@@ -85,9 +88,12 @@ export default function TeacherDashboard() {
               <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
                 {/* Class header */}
                 <div className="px-5 py-4 border-b border-gray-50">
-                  <Link to={`/teacher/class/${cls.id}`} className="font-semibold text-gray-900 leading-tight hover:text-crimson transition-colors block">
+                  <button
+                    onClick={() => setSelectedClassId(cls.id)}
+                    className="font-semibold text-gray-900 leading-tight hover:text-crimson transition-colors block text-left w-full"
+                  >
                     {cls.name}
-                  </Link>
+                  </button>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     {cls.subject && (
                       <span className="text-xs text-gray-400">{cls.subject}</span>
@@ -164,6 +170,15 @@ export default function TeacherDashboard() {
           })}
         </div>
       </div>
+
+      <SlideOver open={selectedClassId != null} onClose={() => setSelectedClassId(null)}>
+        {selectedClassId && (
+          <TeacherClassDetailContent
+            classId={selectedClassId}
+            onClose={() => setSelectedClassId(null)}
+          />
+        )}
+      </SlideOver>
     </div>
   );
 }
