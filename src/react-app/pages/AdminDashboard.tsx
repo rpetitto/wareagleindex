@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { Routes, Route, Link, useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
 import QuadrantScatter from "../components/QuadrantScatter";
@@ -81,6 +81,333 @@ function OverviewPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Survey Detail Panel ──────────────────────────────────────────────────────
+
+interface SurveyResponse {
+  student_id: string;
+  student_name: string | null;
+  class_id: string;
+  class_name: string | null;
+  teacher_name: string | null;
+  challenge?: number;
+  love?: number;
+  connection?: number;
+  contribution?: number;
+  submitted_at: string;
+}
+
+interface SurveyDetail {
+  window: { id: string; name: string; type: string; opens_at: string; closes_at: string };
+  eligible: number;
+  responses: SurveyResponse[];
+}
+
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  selected: Set<string>;
+  onChange: (v: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const count = selected.size;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-colors ${
+          count > 0
+            ? "bg-crimson/5 border-crimson/30 text-crimson font-medium"
+            : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+        }`}
+      >
+        {label}{count > 0 ? ` (${count})` : ""}
+        <svg className="w-3.5 h-3.5 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg min-w-[160px] max-h-64 overflow-y-auto py-1">
+          {options.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-gray-400">No options</div>
+          ) : (
+            options.map((opt) => (
+              <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selected.has(opt.value)}
+                  onChange={() => {
+                    const next = new Set(selected);
+                    if (next.has(opt.value)) next.delete(opt.value);
+                    else next.add(opt.value);
+                    onChange(next);
+                  }}
+                  className="w-3.5 h-3.5 accent-crimson"
+                />
+                <span className="text-xs text-gray-700" title={opt.label}>
+                  {opt.label.length > 12 ? opt.label.slice(0, 12) + "…" : opt.label}
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Quadrant = "flow" | "comfort" | "anxiety" | "boredom";
+
+function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; onClose: () => void }) {
+  const [detail, setDetail] = useState<SurveyDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filterStudents, setFilterStudents] = useState<Set<string>>(new Set());
+  const [filterTeachers, setFilterTeachers] = useState<Set<string>>(new Set());
+  const [filterCourses, setFilterCourses] = useState<Set<string>>(new Set());
+  const [filterClasses, setFilterClasses] = useState<Set<string>>(new Set());
+  const [activeQuadrant, setActiveQuadrant] = useState<Quadrant | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setDetail(null);
+    setFilterStudents(new Set());
+    setFilterTeachers(new Set());
+    setFilterCourses(new Set());
+    setFilterClasses(new Set());
+    setActiveQuadrant(null);
+    fetch(`/api/admin/surveys/${windowId}/detail`)
+      .then((r) => r.json())
+      .then((d) => { setDetail(d as SurveyDetail); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [windowId]);
+
+  const allStudents = useMemo(() => {
+    if (!detail) return [];
+    const seen = new Set<string>();
+    return detail.responses
+      .filter((r) => { if (seen.has(r.student_id)) return false; seen.add(r.student_id); return true; })
+      .map((r) => ({ value: r.student_id, label: r.student_name ?? r.student_id }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [detail]);
+
+  const allTeachers = useMemo(() => {
+    if (!detail) return [];
+    const seen = new Set<string>();
+    return detail.responses
+      .filter((r) => r.teacher_name && !seen.has(r.teacher_name) && seen.add(r.teacher_name as string))
+      .map((r) => ({ value: r.teacher_name!, label: r.teacher_name! }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [detail]);
+
+  const allCourses = useMemo(() => {
+    if (!detail) return [];
+    const seen = new Set<string>();
+    return detail.responses
+      .filter((r) => r.class_name && !seen.has(r.class_name) && seen.add(r.class_name as string))
+      .map((r) => ({ value: r.class_name!, label: r.class_name! }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [detail]);
+
+  const allClasses = useMemo(() => {
+    if (!detail) return [];
+    const seen = new Set<string>();
+    return detail.responses
+      .filter((r) => !seen.has(r.class_id) && seen.add(r.class_id))
+      .map((r) => ({ value: r.class_id, label: r.class_name ?? r.class_id }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [detail]);
+
+  const filtered = useMemo(() => {
+    if (!detail) return [];
+    return detail.responses.filter((r) => {
+      if (filterStudents.size > 0 && !filterStudents.has(r.student_id)) return false;
+      if (filterTeachers.size > 0 && !filterTeachers.has(r.teacher_name ?? "")) return false;
+      if (filterCourses.size > 0 && !filterCourses.has(r.class_name ?? "")) return false;
+      if (filterClasses.size > 0 && !filterClasses.has(r.class_id)) return false;
+      if (activeQuadrant && r.challenge != null && r.love != null) {
+        const highC = r.challenge > 5;
+        const highL = r.love > 5;
+        if (activeQuadrant === "flow" && !(highC && highL)) return false;
+        if (activeQuadrant === "comfort" && !(!highC && highL)) return false;
+        if (activeQuadrant === "anxiety" && !(highC && !highL)) return false;
+        if (activeQuadrant === "boredom" && !(!highC && !highL)) return false;
+      }
+      return true;
+    });
+  }, [detail, filterStudents, filterTeachers, filterCourses, filterClasses, activeQuadrant]);
+
+  const eiPoints = useMemo(
+    () => filtered.filter((r) => r.challenge != null && r.love != null).map((r) => ({ challenge: r.challenge!, love: r.love! })),
+    [filtered]
+  );
+
+  const avgChallenge = eiPoints.length > 0 ? eiPoints.reduce((s, r) => s + r.challenge, 0) / eiPoints.length : null;
+  const avgLove = eiPoints.length > 0 ? eiPoints.reduce((s, r) => s + r.love, 0) / eiPoints.length : null;
+
+  const miFiltered = useMemo(() => filtered.filter((r) => r.connection != null && r.contribution != null), [filtered]);
+  const avgConnection = miFiltered.length > 0 ? miFiltered.reduce((s, r) => s + r.connection!, 0) / miFiltered.length : null;
+  const avgContribution = miFiltered.length > 0 ? miFiltered.reduce((s, r) => s + r.contribution!, 0) / miFiltered.length : null;
+
+  const anyFilterActive = filterStudents.size > 0 || filterTeachers.size > 0 || filterCourses.size > 0 || filterClasses.size > 0 || activeQuadrant != null;
+
+  function clearAll() {
+    setFilterStudents(new Set());
+    setFilterTeachers(new Set());
+    setFilterCourses(new Set());
+    setFilterClasses(new Set());
+    setActiveQuadrant(null);
+  }
+
+  if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
+  if (!detail) return <div className="text-center text-gray-400 py-12">Survey not found.</div>;
+
+  const { window: win, eligible, responses } = detail;
+  const pct = eligible > 0 ? Math.round((responses.length / eligible) * 100) : 0;
+  const isEI = win.type === "engagement_index";
+  const isMI = win.type === "mattering_index";
+
+  // Quadrant counts from all responses (not filtered), using mid=5
+  const qCounts = { flow: 0, comfort: 0, anxiety: 0, boredom: 0 };
+  for (const r of responses) {
+    if (r.challenge == null || r.love == null) continue;
+    if (r.challenge > 5 && r.love > 5) qCounts.flow++;
+    else if (r.challenge <= 5 && r.love > 5) qCounts.comfort++;
+    else if (r.challenge > 5 && r.love <= 5) qCounts.anxiety++;
+    else qCounts.boredom++;
+  }
+
+  const quadrantTiles: { key: Quadrant; label: string; count: number; colors: string; activeColors: string }[] = [
+    { key: "flow", label: "Flow", count: qCounts.flow, colors: "border-l-4 border-l-green-400 bg-green-50", activeColors: "border-l-4 border-l-green-600 bg-green-100 ring-2 ring-green-400" },
+    { key: "comfort", label: "Comfort", count: qCounts.comfort, colors: "border-l-4 border-l-blue-400 bg-blue-50", activeColors: "border-l-4 border-l-blue-600 bg-blue-100 ring-2 ring-blue-400" },
+    { key: "anxiety", label: "Anxiety", count: qCounts.anxiety, colors: "border-l-4 border-l-orange-400 bg-orange-50", activeColors: "border-l-4 border-l-orange-600 bg-orange-100 ring-2 ring-orange-400" },
+    { key: "boredom", label: "Boredom", count: qCounts.boredom, colors: "border-l-4 border-l-gray-300 bg-gray-50", activeColors: "border-l-4 border-l-gray-500 bg-gray-100 ring-2 ring-gray-400" },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TYPE_BADGE[win.type] ?? "bg-gray-100 text-gray-600"}`}>
+            {TYPE_LABEL[win.type] ?? win.type}
+          </span>
+          <h2 className="text-lg font-bold text-gray-900">{win.name}</h2>
+        </div>
+        <p className="text-xs text-gray-400">
+          {new Date(win.opens_at).toLocaleString()} → {new Date(win.closes_at).toLocaleString()}
+        </p>
+      </div>
+
+      {/* Completion bar */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div className="flex items-baseline justify-between mb-2">
+          <span className="text-sm font-medium text-gray-700">
+            {responses.length} of {eligible} eligible students responded
+          </span>
+          <span className="text-sm font-bold text-crimson">{pct}%</span>
+        </div>
+        <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+          <div className="h-full bg-crimson rounded-full transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      {/* Quadrant tiles (EI only) */}
+      {isEI && (
+        <div className="grid grid-cols-4 gap-3">
+          {quadrantTiles.map((tile) => (
+            <button
+              key={tile.key}
+              onClick={() => setActiveQuadrant(activeQuadrant === tile.key ? null : tile.key)}
+              className={`rounded-xl p-3 text-left transition-all ${activeQuadrant === tile.key ? tile.activeColors : tile.colors}`}
+            >
+              <div className="text-2xl font-bold text-gray-900">{tile.count}</div>
+              <div className="text-xs text-gray-600 mt-0.5">{tile.label}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <MultiSelect label="Teacher" options={allTeachers} selected={filterTeachers} onChange={setFilterTeachers} />
+        <MultiSelect label="Course" options={allCourses} selected={filterCourses} onChange={setFilterCourses} />
+        <MultiSelect label="Class" options={allClasses} selected={filterClasses} onChange={setFilterClasses} />
+        <MultiSelect label="Student" options={allStudents} selected={filterStudents} onChange={setFilterStudents} />
+        {anyFilterActive && (
+          <button onClick={clearAll} className="text-xs text-gray-500 hover:text-crimson transition-colors underline">
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Scatter (EI only) */}
+      {isEI && eiPoints.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Engagement Scatter</p>
+          <QuadrantScatter responses={eiPoints} />
+        </div>
+      )}
+
+      {/* Averages */}
+      {(isEI || isMI) && (
+        <div className="grid grid-cols-2 gap-3">
+          {isEI && (
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">EI Averages</p>
+              <div className="space-y-2">
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Challenge</span><span>/ 10</span></div>
+                  <MetricBar value={avgChallenge} max={10} color="bg-green-400" />
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Love</span><span>/ 10</span></div>
+                  <MetricBar value={avgLove} max={10} color="bg-green-400" />
+                </div>
+              </div>
+            </div>
+          )}
+          {isMI && (
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">MI Averages</p>
+              <div className="space-y-2">
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Connection</span><span>/ 5</span></div>
+                  <MetricBar value={avgConnection} max={5} color="bg-blue-400" />
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Contribution</span><span>/ 5</span></div>
+                  <MetricBar value={avgContribution} max={5} color="bg-blue-400" />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Response count note */}
+      <p className="text-xs text-gray-400">
+        {filtered.length} response{filtered.length !== 1 ? "s" : ""} shown
+      </p>
     </div>
   );
 }
@@ -170,6 +497,7 @@ function SurveysPage() {
   const [surveys, setSurveys] = useState<SurveyWindow[]>([]);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedWindowId, setSelectedWindowId] = useState<string | null>(null);
 
   function load() {
     fetch("/api/admin/surveys").then((r) => r.json()).then((d) => setSurveys(d as SurveyWindow[]));
@@ -244,7 +572,7 @@ function SurveysPage() {
         {surveys.map((w) => {
           const status = windowStatus(w);
           return (
-            <div key={w.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div key={w.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden" onClick={() => { if (editingId !== w.id) setSelectedWindowId(w.id); }}>
               {editingId === w.id ? (
                 <div className="p-4">
                   <SurveyForm
@@ -258,18 +586,21 @@ function SurveysPage() {
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TYPE_BADGE[w.type] ?? "bg-gray-100 text-gray-600"}`}>
                     {TYPE_LABEL[w.type] ?? w.type}
                   </span>
-                  <div className="flex-1 min-w-0">
+                  <button
+                    className="flex-1 min-w-0 text-left hover:text-crimson transition-colors"
+                    onClick={() => setSelectedWindowId(w.id)}
+                  >
                     <p className="font-medium text-gray-900 truncate">{w.name}</p>
                     <p className="text-xs text-gray-400">
                       {new Date(w.opens_at).toLocaleString()} → {new Date(w.closes_at).toLocaleString()}
                     </p>
-                  </div>
+                  </button>
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${status.color}`}>
                     {status.label}
                   </span>
                   <div className="flex items-center gap-1 ml-2">
                     <button
-                      onClick={() => setEditingId(w.id)}
+                      onClick={(e) => { e.stopPropagation(); setEditingId(w.id); }}
                       className="p-1.5 text-gray-400 hover:text-gray-700 transition-colors"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -277,7 +608,7 @@ function SurveysPage() {
                       </svg>
                     </button>
                     <button
-                      onClick={() => handleDelete(w.id)}
+                      onClick={(e) => { e.stopPropagation(); handleDelete(w.id); }}
                       className="p-1.5 text-gray-400 hover:text-red-600 transition-colors"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -291,6 +622,12 @@ function SurveysPage() {
           );
         })}
       </div>
+
+      <SlideOver open={selectedWindowId != null} onClose={() => setSelectedWindowId(null)}>
+        {selectedWindowId && (
+          <SurveyDetailPanel windowId={selectedWindowId} onClose={() => setSelectedWindowId(null)} />
+        )}
+      </SlideOver>
     </div>
   );
 }
@@ -805,9 +1142,11 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
   const [data, setData] = useState<UserProfileData | null>(null);
   const [overview, setOverview] = useState<TeacherOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [drillClassId, setDrillClassId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
+    setDrillClassId(null);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
       .then((d) => {
@@ -829,6 +1168,24 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
 
   const { profile, classes, teaches } = data;
   const isTeacher = profile.role === "teacher" || profile.role === "admin";
+
+  /* ── Drilled into a class ── */
+  if (drillClassId) {
+    return (
+      <div>
+        <button
+          onClick={() => setDrillClassId(null)}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+          </svg>
+          Back to {profile.name}
+        </button>
+        <AdminClassDetailContent classId={drillClassId} onClose={() => setDrillClassId(null)} />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -890,11 +1247,15 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
             </div>
             <div className="divide-y divide-gray-50">
               {teaches.map((cls) => (
-                <div key={cls.id} className="px-5 py-3 flex items-center gap-3">
+                <button
+                  key={cls.id}
+                  onClick={() => setDrillClassId(cls.id)}
+                  className="w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors"
+                >
                   <div className="flex-1 min-w-0">
-                    <Link to={`/admin/classes/${cls.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+                    <p className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors">
                       {cls.name}
-                    </Link>
+                    </p>
                     {cls.grade_level && (
                       <p className="text-xs text-gray-400">Grade {cls.grade_level}</p>
                     )}
@@ -905,7 +1266,10 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
                     </svg>
                     {cls.student_count} students
                   </div>
-                </div>
+                  <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
               ))}
             </div>
           </div>
@@ -929,13 +1293,21 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
           <div className="space-y-4">
             {classes.map((cls) => (
               <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="px-5 py-4 border-b border-gray-50">
-                  <h3 className="font-semibold text-gray-900">{cls.name}</h3>
-                  <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
-                    {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
-                    {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                <button
+                  onClick={() => setDrillClassId(cls.id)}
+                  className="w-full px-5 py-4 border-b border-gray-50 text-left hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
+                >
+                  <div>
+                    <h3 className="font-semibold text-gray-900 hover:text-crimson transition-colors">{cls.name}</h3>
+                    <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                      {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
+                      {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                    </div>
                   </div>
-                </div>
+                  <svg className="w-4 h-4 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
 
                 {cls.responses.length === 0 ? (
                   <div className="px-5 py-3 text-xs text-gray-400">No survey responses yet.</div>
