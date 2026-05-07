@@ -39,7 +39,7 @@ export default function NavBar() {
           </div>
           <div className="flex items-center gap-3">
             {user?.picture && (
-              <img src={user.picture} alt={user.name} className="w-7 h-7 rounded-full" />
+              <img src={user.picture} alt={user.name} className="w-7 h-7 rounded-full object-cover object-top" />
             )}
             <span className="text-sm text-white/80 hidden sm:inline">{user?.name}</span>
             <button

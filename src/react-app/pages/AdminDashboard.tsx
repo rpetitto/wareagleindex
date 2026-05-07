@@ -382,7 +382,7 @@ function UsersPage() {
             className={`flex items-center gap-3 px-4 py-3 ${i < users.length - 1 ? "border-b border-gray-50" : ""}`}
           >
             {u.picture ? (
-              <img src={u.picture} alt={u.name} className="w-8 h-8 rounded-full shrink-0" />
+              <img src={u.picture} alt={u.name} className="w-8 h-8 rounded-full object-cover object-top shrink-0" />
             ) : (
               <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-500 shrink-0">
                 {u.name[0]}
@@ -847,7 +847,7 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       {/* Header */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6 flex items-center gap-4">
         {profile.picture ? (
-          <img src={profile.picture} alt={profile.name} className="w-14 h-14 rounded-full shrink-0" />
+          <img src={profile.picture} alt={profile.name} className="w-14 h-14 rounded-full object-cover object-top shrink-0" />
         ) : (
           <div className="w-14 h-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-500 shrink-0">
             {profile.name[0]}
