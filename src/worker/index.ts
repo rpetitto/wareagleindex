@@ -312,6 +312,12 @@ app.post("/api/student/respond/dimensions", async (c) => {
 
 // ─── Teacher ─────────────────────────────────────────────────────────────────
 
+function syStartDate(): string {
+  const now = new Date();
+  const year = now.getUTCMonth() >= 7 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
+  return `${year}-08-01`;
+}
+
 app.get("/api/teacher/classes", async (c) => {
   const user = await getSessionUser(c);
   if (!user) return c.json({ error: "Unauthorized" }, 401);
@@ -320,14 +326,43 @@ app.get("/api/teacher/classes", async (c) => {
 
   const classes = await db
     .prepare(
-      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term, c.veracross_id
+      `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term, c.veracross_id, c.begin_date
        FROM teacher_classes tc JOIN classes c ON c.id = tc.class_id
        WHERE tc.teacher_id = ?1 ORDER BY c.name`
     )
     .bind(user.id)
-    .all<{ id: string; name: string; subject: string | null; grade_level: string | null; school_year: string | null; term: string | null; veracross_id: string | null }>();
+    .all<{ id: string; name: string; subject: string | null; grade_level: string | null; school_year: string | null; term: string | null; veracross_id: string | null; begin_date: string | null }>();
 
-  // For each class, get active windows and response counts
+  const syStart = syStartDate();
+
+  // Batch school-year EI/MI stats across all teacher classes in two queries
+  const syEiAll = await db
+    .prepare(
+      `SELECT er.class_id, AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = er.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2
+       GROUP BY er.class_id`
+    )
+    .bind(user.id, syStart)
+    .all<{ class_id: string; avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const syMiAll = await db
+    .prepare(
+      `SELECT mr.class_id, AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt
+       FROM mattering_responses mr
+       JOIN survey_windows sw ON sw.id = mr.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = mr.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2
+       GROUP BY mr.class_id`
+    )
+    .bind(user.id, syStart)
+    .all<{ class_id: string; avg_c: number | null; avg_l: number | null; cnt: number }>();
+
+  const eiMap = new Map((syEiAll.results ?? []).map((r) => [r.class_id, r]));
+  const miMap = new Map((syMiAll.results ?? []).map((r) => [r.class_id, r]));
+
+  // For each class, get student count and survey windows
   const result = [];
   for (const cls of classes.results) {
     const studentCount = await db
@@ -351,10 +386,65 @@ app.get("/api/teacher/classes", async (c) => {
       ...cls,
       studentCount: studentCount?.cnt ?? 0,
       windows: windows.results,
+      sy_ei: eiMap.get(cls.id) ?? null,
+      sy_mi: miMap.get(cls.id) ?? null,
     });
   }
 
   return c.json(result);
+});
+
+// Teacher overview: cross-class aggregates for the current school year
+app.get("/api/teacher/overview", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  if (user.role !== "teacher" && user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const syStart = syStartDate();
+
+  const ei = await db
+    .prepare(
+      `SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt,
+              COUNT(DISTINCT er.survey_window_id) as win_cnt,
+              COUNT(DISTINCT er.class_id) as class_cnt
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = er.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(user.id, syStart)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number; win_cnt: number; class_cnt: number }>();
+
+  const mi = await db
+    .prepare(
+      `SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt
+       FROM mattering_responses mr
+       JOIN survey_windows sw ON sw.id = mr.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = mr.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(user.id, syStart)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+
+  const eiPoints = await db
+    .prepare(
+      `SELECT er.challenge, er.love
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = er.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(user.id, syStart)
+    .all<{ challenge: number; love: number }>();
+
+  return c.json({
+    school_year: {
+      ei,
+      mi,
+      ei_points: eiPoints.results ?? [],
+      since: syStart,
+    },
+  });
 });
 
 // Teacher: browse all classes and claim ones they teach
