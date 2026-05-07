@@ -305,46 +305,32 @@ workflow("veracross-sync", {
       console.warn(`grading_periods fetch failed:`, err);
     }
 
-    // class_schedules: allowlist of internal_class_id values for the current
-    // school year, and a map of class → grading period date range.
-    // A class may span multiple grading periods (full-year class); store
-    // min(start_date) and max(end_date) across all its periods.
-    let scheduledClassIds: Set<number> | null = null;
+    // class_schedules: used only to extract grading period date ranges per class.
+    // NOT used as an enrollment allowlist — PE/electives often have no scheduled
+    // block and would be incorrectly excluded. currently_enrolled=true + regex
+    // filters are sufficient gatekeeping.
     const classDateRange = new Map<number, { begin_date: string; end_date: string }>();
     try {
-      // school_year filter returns 0 rows on this endpoint, so fetch unfiltered
-      // and rely on grading_period.school_year inline on each schedule record
-      // for date-range mapping.
-      const schedules = await vcGet<VCClassSchedule>(
-        base,
-        `academics/class_schedules`,
-        token,
-        20
-      );
+      const schedules = await vcGet<VCClassSchedule>(base, `academics/class_schedules`, token, 20);
       console.log(`class_schedules: ${schedules.length} rows`);
-      if (schedules.length > 0) {
-        scheduledClassIds = new Set<number>();
-        for (const s of schedules) {
-          scheduledClassIds.add(s.internal_class_id);
-          const gpId = s.grading_period?.id;
-          if (gpId && gpDates.has(gpId)) {
-            const { begin_date, end_date } = gpDates.get(gpId)!;
-            const existing = classDateRange.get(s.internal_class_id);
-            if (!existing) {
-              classDateRange.set(s.internal_class_id, { begin_date, end_date });
-            } else {
-              // expand range to cover all grading periods this class appears in
-              classDateRange.set(s.internal_class_id, {
-                begin_date: begin_date < existing.begin_date ? begin_date : existing.begin_date,
-                end_date: end_date > existing.end_date ? end_date : existing.end_date,
-              });
-            }
+      for (const s of schedules) {
+        const gpId = s.grading_period?.id;
+        if (gpId && gpDates.has(gpId)) {
+          const { begin_date, end_date } = gpDates.get(gpId)!;
+          const existing = classDateRange.get(s.internal_class_id);
+          if (!existing) {
+            classDateRange.set(s.internal_class_id, { begin_date, end_date });
+          } else {
+            classDateRange.set(s.internal_class_id, {
+              begin_date: begin_date < existing.begin_date ? begin_date : existing.begin_date,
+              end_date: end_date > existing.end_date ? end_date : existing.end_date,
+            });
           }
         }
-        console.log(`class_schedules allowlist: ${scheduledClassIds.size} unique class ids, ${classDateRange.size} with date ranges`);
       }
+      console.log(`class date ranges populated: ${classDateRange.size} classes`);
     } catch (err) {
-      console.warn(`class_schedules fetch failed, skipping allowlist:`, err);
+      console.warn(`class_schedules fetch failed, skipping date ranges:`, err);
     }
 
     const allEnrollments = await vcGet<VCEnrollment>(
@@ -359,7 +345,6 @@ workflow("veracross-sync", {
         e.exclude_from_transcript !== true &&
         String(e.class_status).toLowerCase() !== "future" &&
         !isWithdrawn(e.date_withdrawn) &&
-        (scheduledClassIds === null || scheduledClassIds.has(e.internal_class_id)) &&
         !isNonAcademic(e.class_description ?? "")
     );
 
