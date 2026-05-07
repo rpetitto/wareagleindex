@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
+import QuadrantScatter from "../components/QuadrantScatter";
 
 interface AggregateData {
   cls: {
@@ -17,16 +18,19 @@ interface AggregateData {
     window: { id: string; name: string; opens_at: string };
     ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
     mi: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
+    ei_points: { challenge: number; love: number }[];
   } | null;
   school_year: {
     ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
     mi: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
     window_count: number;
+    ei_points: { challenge: number; love: number }[];
   };
   lifetime_course: {
     ei: { avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number } | null;
     mi: { avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number } | null;
     class_count: number;
+    ei_points: { challenge: number; love: number }[];
   };
 }
 
@@ -49,6 +53,7 @@ function AggSection({
   subtitle,
   ei,
   mi,
+  eiPoints,
   windowCount,
   responseCount,
 }: {
@@ -56,6 +61,7 @@ function AggSection({
   subtitle?: string;
   ei: { avg_c: number | null; avg_l: number | null } | null | undefined;
   mi: { avg_c: number | null; avg_l: number | null } | null | undefined;
+  eiPoints?: { challenge: number; love: number }[];
   windowCount?: number;
   responseCount?: number;
 }) {
@@ -119,6 +125,12 @@ function AggSection({
                   <MetricBar value={mi!.avg_l} max={5} color="bg-blue-400" />
                 </div>
               </div>
+            </div>
+          )}
+          {eiPoints && eiPoints.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Engagement Scatter</p>
+              <QuadrantScatter responses={eiPoints} />
             </div>
           )}
         </div>
@@ -194,6 +206,7 @@ export default function TeacherClassDetail() {
             subtitle={latest_window ? `${latest_window.window.name} · ${new Date(latest_window.window.opens_at).toLocaleDateString()}` : undefined}
             ei={latest_window?.ei}
             mi={latest_window?.mi}
+            eiPoints={latest_window?.ei_points}
             responseCount={latest_window ? ((latest_window.ei?.cnt ?? 0) + (latest_window.mi?.cnt ?? 0)) : undefined}
           />
 
@@ -203,6 +216,7 @@ export default function TeacherClassDetail() {
             subtitle={cls.begin_date ? `Since ${new Date(cls.begin_date).toLocaleDateString()}` : "Last 12 months"}
             ei={school_year.ei}
             mi={school_year.mi}
+            eiPoints={school_year.ei_points}
             windowCount={school_year.window_count}
           />
 
@@ -212,6 +226,7 @@ export default function TeacherClassDetail() {
             subtitle={`Across ${lifetime_course.class_count} section${lifetime_course.class_count !== 1 ? "s" : ""} you have taught`}
             ei={lifetime_course.ei}
             mi={lifetime_course.mi}
+            eiPoints={lifetime_course.ei_points}
           />
 
           {/* Link to past survey windows */}

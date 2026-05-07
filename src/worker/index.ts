@@ -814,10 +814,15 @@ app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
       .prepare(`SELECT AVG(connection) as avg_c, AVG(contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
       .bind(classId, latestWindow.id)
       .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+    const eiPoints = await db
+      .prepare(`SELECT challenge, love FROM engagement_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .all<{ challenge: number; love: number }>();
     latest_window = {
       window: latestWindow,
       ei: eiAgg,
       mi: miAgg,
+      ei_points: eiPoints.results ?? [],
     };
   }
 
@@ -840,10 +845,14 @@ app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
     .prepare(`SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
     .bind(classId, syStartParam)
     .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const syEiPoints = await db
+    .prepare(`SELECT er.challenge, er.love FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .all<{ challenge: number; love: number }>();
 
   // Lifetime course aggregate (this teacher, same course name across all their sections)
   const teacherId = user.role === "admin" ? null : user.id;
-  let lifetimeEi, lifetimeMi;
+  let lifetimeEi, lifetimeMi, lifetimeEiPoints;
   if (teacherId) {
     lifetimeEi = await db
       .prepare(
@@ -865,6 +874,16 @@ app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
       )
       .bind(cls.name, teacherId)
       .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+    const ltPts = await db
+      .prepare(
+        `SELECT er.challenge, er.love FROM engagement_responses er
+         JOIN classes c ON c.id = er.class_id
+         JOIN teacher_classes tc ON tc.class_id = c.id
+         WHERE c.name = ?1 AND tc.teacher_id = ?2`
+      )
+      .bind(cls.name, teacherId)
+      .all<{ challenge: number; love: number }>();
+    lifetimeEiPoints = ltPts.results ?? [];
   } else {
     lifetimeEi = await db
       .prepare(
@@ -884,6 +903,14 @@ app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
       )
       .bind(cls.name)
       .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+    const ltPts = await db
+      .prepare(
+        `SELECT er.challenge, er.love FROM engagement_responses er
+         JOIN classes c ON c.id = er.class_id WHERE c.name = ?1`
+      )
+      .bind(cls.name)
+      .all<{ challenge: number; love: number }>();
+    lifetimeEiPoints = ltPts.results ?? [];
   }
 
   const lifetimeClassCount = await db
@@ -898,11 +925,13 @@ app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
       ei: syEi,
       mi: syMi,
       window_count: Math.max(syEiWinCount?.cnt ?? 0, syMiWinCount?.cnt ?? 0),
+      ei_points: syEiPoints.results ?? [],
     },
     lifetime_course: {
       ei: lifetimeEi,
       mi: lifetimeMi,
       class_count: lifetimeClassCount?.cnt ?? 0,
+      ei_points: lifetimeEiPoints,
     },
   });
 });
@@ -947,7 +976,11 @@ app.get("/api/admin/classes/:classId/aggregates", async (c) => {
       .prepare(`SELECT AVG(connection) as avg_c, AVG(contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
       .bind(classId, latestWindow.id)
       .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
-    latest_window = { window: latestWindow, ei: eiAgg, mi: miAgg };
+    const eiPoints = await db
+      .prepare(`SELECT challenge, love FROM engagement_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .all<{ challenge: number; love: number }>();
+    latest_window = { window: latestWindow, ei: eiAgg, mi: miAgg, ei_points: eiPoints.results ?? [] };
   }
 
   const syStartParam = cls.begin_date ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -967,6 +1000,10 @@ app.get("/api/admin/classes/:classId/aggregates", async (c) => {
     .prepare(`SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
     .bind(classId, syStartParam)
     .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const syEiPoints = await db
+    .prepare(`SELECT er.challenge, er.love FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .all<{ challenge: number; love: number }>();
 
   // Lifetime across ALL teachers for same course name
   const lifetimeEi = await db
@@ -987,6 +1024,10 @@ app.get("/api/admin/classes/:classId/aggregates", async (c) => {
     )
     .bind(cls.name)
     .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+  const lifetimeEiPoints = await db
+    .prepare(`SELECT er.challenge, er.love FROM engagement_responses er JOIN classes c ON c.id = er.class_id WHERE c.name = ?1`)
+    .bind(cls.name)
+    .all<{ challenge: number; love: number }>();
 
   const lifetimeClassCount = await db
     .prepare(`SELECT COUNT(DISTINCT id) as cnt FROM classes WHERE name = ?1`)
@@ -1005,12 +1046,14 @@ app.get("/api/admin/classes/:classId/aggregates", async (c) => {
       ei: syEi,
       mi: syMi,
       window_count: Math.max(syEiWinCount?.cnt ?? 0, syMiWinCount?.cnt ?? 0),
+      ei_points: syEiPoints.results ?? [],
     },
     lifetime_course: {
       ei: lifetimeEi,
       mi: lifetimeMi,
       class_count: lifetimeClassCount?.cnt ?? 0,
       total_student_count: totalStudentCount?.cnt ?? 0,
+      ei_points: lifetimeEiPoints.results ?? [],
     },
   });
 });
