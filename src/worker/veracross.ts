@@ -268,9 +268,30 @@ workflow("veracross-sync", {
     // meeting. Any class with at least one schedule entry is "real" — past-term
     // and non-academic (homeroom, advisory, etc.) classes typically have no
     // schedule. We use this as an allowlist of internal_class_id values.
-    const schedules = await vcGet<VCClassSchedule>(base, "academics/class_schedules", token);
-    const scheduledClassIds = new Set<number>();
-    for (const s of schedules) scheduledClassIds.add(s.internal_class_id);
+    //
+    // Filter by school_year to keep the response size manageable; the endpoint
+    // can otherwise return tens of thousands of rows across all years and
+    // exhaust the worker's D1 budget. If the call fails or returns nothing,
+    // skip the allowlist (fail-soft) — the regex filter still rejects most
+    // non-academic classes.
+    const schoolYear = currentSchoolYear();
+    let scheduledClassIds: Set<number> | null = null;
+    try {
+      const schedules = await vcGet<VCClassSchedule>(
+        base,
+        `academics/class_schedules?school_year=${schoolYear}`,
+        token,
+        10
+      );
+      console.log(`class_schedules: ${schedules.length} rows for school_year=${schoolYear}`);
+      if (schedules.length > 0) {
+        scheduledClassIds = new Set<number>();
+        for (const s of schedules) scheduledClassIds.add(s.internal_class_id);
+        console.log(`class_schedules allowlist: ${scheduledClassIds.size} unique class ids`);
+      }
+    } catch (err) {
+      console.warn(`class_schedules fetch failed, skipping allowlist:`, err);
+    }
 
     const allEnrollments = await vcGet<VCEnrollment>(
       base,
@@ -284,7 +305,7 @@ workflow("veracross-sync", {
         e.exclude_from_transcript !== true &&
         String(e.class_status).toLowerCase() !== "future" &&
         !isWithdrawn(e.date_withdrawn) &&
-        scheduledClassIds.has(e.internal_class_id) &&
+        (scheduledClassIds === null || scheduledClassIds.has(e.internal_class_id)) &&
         !isNonAcademic(e.class_description ?? "")
     );
 
