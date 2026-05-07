@@ -42,6 +42,16 @@ export default function QuadrantScatter({ responses }: { responses: Response[] }
     else quadCounts.boredom++;
   }
 
+  // Group overlapping dots
+  const dotMap = new Map<string, { challenge: number; love: number; count: number }>();
+  for (const r of responses) {
+    const key = `${r.challenge},${r.love}`;
+    const existing = dotMap.get(key);
+    if (existing) existing.count++;
+    else dotMap.set(key, { challenge: r.challenge, love: r.love, count: 1 });
+  }
+  const dots = Array.from(dotMap.values());
+
   return (
     <div>
       <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="w-full max-w-md mx-auto">
@@ -52,10 +62,20 @@ export default function QuadrantScatter({ responses }: { responses: Response[] }
         <line x1={PAD_L + PLOT_W / 2} y1={PAD_T} x2={PAD_L + PLOT_W / 2} y2={PAD_T + PLOT_H} stroke="#d1d5db" strokeWidth="1" strokeDasharray="4,3" />
         <line x1={PAD_L} y1={PAD_T + PLOT_H / 2} x2={PAD_L + PLOT_W} y2={PAD_T + PLOT_H / 2} stroke="#d1d5db" strokeWidth="1" strokeDasharray="4,3" />
 
-        {/* Student dots */}
-        {responses.map((r, i) => {
-          const d = toSvg(r.challenge, r.love);
-          return <circle key={i} cx={d.x} cy={d.y} r="5" fill="rgba(139,0,0,0.55)" stroke="white" strokeWidth="1" />;
+        {/* Student dots — grouped by position, radius grows with count */}
+        {dots.map((dot, i) => {
+          const d = toSvg(dot.challenge, dot.love);
+          const r = dot.count === 1 ? 5 : dot.count <= 3 ? 7 : 9;
+          return (
+            <g key={i}>
+              <circle cx={d.x} cy={d.y} r={r} fill="rgba(139,0,0,0.55)" stroke="white" strokeWidth="1" />
+              {dot.count > 1 && (
+                <text x={d.x} y={d.y + 4} textAnchor="middle" fontSize="8" fontWeight="bold" fill="white">
+                  {dot.count}
+                </text>
+              )}
+            </g>
+          );
         })}
 
         {/* Average marker */}
