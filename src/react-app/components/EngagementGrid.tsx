@@ -64,7 +64,7 @@ const QUADRANTS = [
     h: PLOT_H / 2,
     anchor: "end" as const,
     dx: PLOT_W / 2 - 8,
-    dy: PLOT_H / 2 - 10,
+    dy: 20,
   },
   {
     label: "Boredom Zone",
@@ -77,7 +77,7 @@ const QUADRANTS = [
     h: PLOT_H / 2,
     anchor: "start" as const,
     dx: 8,
-    dy: PLOT_H / 2 - 10,
+    dy: 20,
   },
 ];
 
