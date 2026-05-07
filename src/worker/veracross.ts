@@ -73,6 +73,14 @@ interface VCPhoto {
   download_url: string;
 }
 
+interface VCClassSchedule {
+  id: number;
+  internal_class_id: number;
+  class_id: string;
+  school_year: number;
+  grading_period?: { id: number; description: string; abbreviation: string } | null;
+}
+
 export type SyncPhase = "teachers" | "students" | "enrollments";
 const PHASE_ORDER: SyncPhase[] = ["teachers", "students", "enrollments"];
 
@@ -88,7 +96,7 @@ async function getVCToken(): Promise<string> {
       grant_type: "client_credentials",
       client_id: clientId,
       client_secret: clientSecret,
-      scope: "students:list staff_faculty:list academics.enrollments:list person_photos:list",
+      scope: "students:list staff_faculty:list academics.enrollments:list academics.class_schedules:list person_photos:list",
     }),
   });
 
@@ -256,11 +264,14 @@ workflow("veracross-sync", {
     const token = await getVCToken();
     const syncStamp = new Date().toISOString();
 
-    // currently_enrolled=true narrows on the server. We don't filter by
-    // school_year here because Veracross encodes it differently across schools
-    // and a wrong value silently returns 0 records. Client-side filters
-    // (date_withdrawn, exclude_from_transcript, non-academic names) handle the
-    // rest.
+    // class_schedules is the authoritative list of classes that are actively
+    // meeting. Any class with at least one schedule entry is "real" — past-term
+    // and non-academic (homeroom, advisory, etc.) classes typically have no
+    // schedule. We use this as an allowlist of internal_class_id values.
+    const schedules = await vcGet<VCClassSchedule>(base, "academics/class_schedules", token);
+    const scheduledClassIds = new Set<number>();
+    for (const s of schedules) scheduledClassIds.add(s.internal_class_id);
+
     const allEnrollments = await vcGet<VCEnrollment>(
       base,
       `academics/enrollments?currently_enrolled=true`,
@@ -273,6 +284,7 @@ workflow("veracross-sync", {
         e.exclude_from_transcript !== true &&
         String(e.class_status).toLowerCase() !== "future" &&
         !isWithdrawn(e.date_withdrawn) &&
+        scheduledClassIds.has(e.internal_class_id) &&
         !isNonAcademic(e.class_description ?? "")
     );
 
