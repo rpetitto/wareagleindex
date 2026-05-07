@@ -29,6 +29,7 @@ const TYPE_LABEL: Record<string, string> = {
 
 function OverviewPage() {
   const [data, setData] = useState<Overview | null>(null);
+  const [selectedWindowId, setSelectedWindowId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/overview").then((r) => r.json()).then((d) => setData(d as Overview));
@@ -49,7 +50,7 @@ function OverviewPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {stats.map((s) => (
-          <Link key={s.label} to={s.to} className="bg-white rounded-xl border border-gray-100 p-4 text-center shadow-sm hover:border-gray-200 hover:shadow-md transition-all block">
+          <Link key={s.label} to={s.to} className="bg-white rounded-xl border border-gray-100 p-4 text-center shadow-sm hover:border-gray-200 hover:shadow-md transition-all block cursor-pointer">
             <div className={`text-3xl font-bold ${s.color}`}>{s.value.toLocaleString()}</div>
             <div className="text-sm text-gray-500 mt-1">{s.label}</div>
           </Link>
@@ -66,7 +67,11 @@ function OverviewPage() {
         ) : (
           <div className="space-y-3">
             {data.activeWindows.map((w) => (
-              <div key={w.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50">
+              <button
+                key={w.id}
+                onClick={() => setSelectedWindowId(w.id)}
+                className="w-full flex items-center justify-between p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors cursor-pointer text-left"
+              >
                 <div className="flex items-center gap-3">
                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${TYPE_BADGE[w.type] ?? "bg-gray-100 text-gray-600"}`}>
                     {TYPE_LABEL[w.type] ?? w.type}
@@ -76,11 +81,17 @@ function OverviewPage() {
                 <span className="text-xs text-gray-400">
                   Closes {new Date(w.closes_at).toLocaleDateString()}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         )}
       </div>
+
+      <SlideOver open={selectedWindowId != null} onClose={() => setSelectedWindowId(null)}>
+        {selectedWindowId && (
+          <SurveyDetailPanel windowId={selectedWindowId} onClose={() => setSelectedWindowId(null)} />
+        )}
+      </SlideOver>
     </div>
   );
 }
@@ -346,22 +357,6 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
         </div>
       </div>
 
-      {/* Quadrant tiles (EI only) */}
-      {isEI && (
-        <div className="grid grid-cols-4 gap-3">
-          {quadrantTiles.map((tile) => (
-            <button
-              key={tile.key}
-              onClick={() => setActiveQuadrant(activeQuadrant === tile.key ? null : tile.key)}
-              className={`rounded-xl p-3 text-left transition-all ${activeQuadrant === tile.key ? tile.activeColors : tile.colors}`}
-            >
-              <div className="text-2xl font-bold text-gray-900">{tile.count}</div>
-              <div className="text-xs text-gray-600 mt-0.5">{tile.label}</div>
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
         <MultiSelect label="Teacher" options={allTeachers} selected={filterTeachers} onChange={setFilterTeachers} />
@@ -587,7 +582,7 @@ function SurveysPage() {
         {surveys.map((w) => {
           const status = windowStatus(w);
           return (
-            <div key={w.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden" onClick={() => { if (editingId !== w.id) setSelectedWindowId(w.id); }}>
+            <div key={w.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden cursor-pointer hover:border-gray-200 transition-colors" onClick={() => { if (editingId !== w.id) setSelectedWindowId(w.id); }}>
               {editingId === w.id ? (
                 <div className="p-4">
                   <SurveyForm
@@ -743,7 +738,7 @@ function UsersPage() {
             <div className="flex-1 min-w-0">
               <button
                 onClick={() => setSelectedUserId(u.id)}
-                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block text-left w-full"
+                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors cursor-pointer block text-left w-full"
               >
                 {u.name}
               </button>
@@ -1265,7 +1260,7 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
                 <button
                   key={cls.id}
                   onClick={() => setDrillClassId(cls.id)}
-                  className="w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors"
+                  className="w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors cursor-pointer"
                 >
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors">
@@ -1310,7 +1305,7 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
               <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
                 <button
                   onClick={() => setDrillClassId(cls.id)}
-                  className="w-full px-5 py-4 border-b border-gray-50 text-left hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
+                  className="w-full px-5 py-4 border-b border-gray-50 text-left hover:bg-gray-50 transition-colors cursor-pointer flex items-center justify-between gap-2"
                 >
                   <div>
                     <h3 className="font-semibold text-gray-900 hover:text-crimson transition-colors">{cls.name}</h3>
@@ -1417,7 +1412,7 @@ function AdminClassesPage() {
             <div className="flex-1 min-w-0">
               <button
                 onClick={() => setSelectedClassId(cls.id)}
-                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block text-left w-full"
+                className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors cursor-pointer block text-left w-full"
               >
                 {cls.name}
               </button>
