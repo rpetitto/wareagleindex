@@ -118,10 +118,13 @@ function MultiSelect({
   onChange: (v: Set<string>) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setSearch(""); return; }
+    setTimeout(() => searchRef.current?.focus(), 0);
     function handler(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     }
@@ -130,6 +133,9 @@ function MultiSelect({
   }, [open]);
 
   const count = selected.size;
+  const filtered = search
+    ? options.filter((o) => o.label.toLowerCase().includes(search.toLowerCase()))
+    : options;
 
   return (
     <div className="relative" ref={ref}>
@@ -147,29 +153,38 @@ function MultiSelect({
         </svg>
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg min-w-[160px] max-h-64 overflow-y-auto py-1">
-          {options.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-gray-400">No options</div>
-          ) : (
-            options.map((opt) => (
-              <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selected.has(opt.value)}
-                  onChange={() => {
-                    const next = new Set(selected);
-                    if (next.has(opt.value)) next.delete(opt.value);
-                    else next.add(opt.value);
-                    onChange(next);
-                  }}
-                  className="w-3.5 h-3.5 accent-crimson"
-                />
-                <span className="text-xs text-gray-700" title={opt.label}>
-                  {opt.label.length > 12 ? opt.label.slice(0, 12) + "…" : opt.label}
-                </span>
-              </label>
-            ))
-          )}
+        <div className="absolute top-full left-0 mt-1 z-30 bg-white border border-gray-200 rounded-xl shadow-lg min-w-[200px] max-h-72 flex flex-col">
+          <div className="px-2 pt-2 pb-1 border-b border-gray-100">
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search…"
+              className="w-full text-xs px-2 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crimson/30"
+            />
+          </div>
+          <div className="overflow-y-auto py-1">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-400">No matches</div>
+            ) : (
+              filtered.map((opt) => (
+                <label key={opt.value} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(opt.value)}
+                    onChange={() => {
+                      const next = new Set(selected);
+                      if (next.has(opt.value)) next.delete(opt.value);
+                      else next.add(opt.value);
+                      onChange(next);
+                    }}
+                    className="w-3.5 h-3.5 accent-crimson"
+                  />
+                  <span className="text-xs text-gray-700" title={opt.label}>{opt.label}</span>
+                </label>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>
