@@ -24,13 +24,31 @@ function MiniBar({ value, max, color }: { value: number | null; max: number; col
   );
 }
 
-export default function TeacherOverviewCard({ overview, title = "This School Year — All Classes" }: { overview: TeacherOverviewData; title?: string }) {
+export default function TeacherOverviewCard({
+  overview,
+  title = "This School Year — All Classes",
+  showEmpty = false,
+}: {
+  overview: TeacherOverviewData | null;
+  title?: string;
+  showEmpty?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const sy = overview.school_year;
-  const hasEi = sy.ei && (sy.ei.avg_c != null || sy.ei.avg_l != null);
-  const hasMi = sy.mi && (sy.mi.avg_c != null || sy.mi.avg_l != null);
+  const sy = overview?.school_year;
+  const hasEi = sy?.ei && (sy.ei.avg_c != null || sy.ei.avg_l != null);
+  const hasMi = sy?.mi && (sy.mi.avg_c != null || sy.mi.avg_l != null);
+  const hasAny = hasEi || hasMi;
 
-  if (!hasEi && !hasMi) return null;
+  if (!hasAny && !showEmpty) return null;
+
+  if (!hasAny) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5">
+        <h3 className="font-semibold text-gray-900 mb-1">{title}</h3>
+        <p className="text-sm text-gray-400">No survey responses this school year.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

@@ -897,7 +897,25 @@ app.get("/api/admin/classes", async (c) => {
     )
     .all();
 
-  return c.json(rows.results);
+  const syStart = syStartDate();
+  const eiStats = await db
+    .prepare(
+      `SELECT er.class_id, AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       WHERE datetime(sw.opens_at) >= ?1
+       GROUP BY er.class_id`
+    )
+    .bind(syStart)
+    .all<{ class_id: string; avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const eiMap = new Map((eiStats.results ?? []).map((r) => [r.class_id, r]));
+
+  const result = (rows.results ?? []).map((cls: Record<string, unknown>) => ({
+    ...cls,
+    sy_ei: eiMap.get(cls.id as string) ?? null,
+  }));
+
+  return c.json(result);
 });
 
 // ─── Teacher Class Aggregates ─────────────────────────────────────────────────

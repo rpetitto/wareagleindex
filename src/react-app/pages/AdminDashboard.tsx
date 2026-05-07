@@ -913,9 +913,9 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       )}
 
       {/* Teacher overview card */}
-      {isTeacher && overview && (
+      {isTeacher && (
         <div className="mt-4">
-          <TeacherOverviewCard overview={overview} title={`This School Year — ${profile.name}'s Classes`} />
+          <TeacherOverviewCard overview={overview} title={`This School Year — ${profile.name}'s Classes`} showEmpty={true} />
         </div>
       )}
 
@@ -985,6 +985,7 @@ interface AdminClass {
   end_date: string | null;
   student_count: number;
   teacher_count: number;
+  sy_ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
 }
 
 function AdminClassesPage() {
@@ -1036,6 +1037,12 @@ function AdminClassesPage() {
               <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
                 {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
                 {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                {cls.sy_ei?.cnt ? (
+                  <span className="text-gray-400">
+                    · {cls.sy_ei.cnt} response{cls.sy_ei.cnt !== 1 ? "s" : ""} this year
+                    {cls.sy_ei.avg_c != null && ` · EI ${cls.sy_ei.avg_c.toFixed(1)} / ${cls.sy_ei.avg_l?.toFixed(1)}`}
+                  </span>
+                ) : null}
               </div>
             </div>
             <div className="text-xs text-gray-500 shrink-0 flex items-center gap-3">
