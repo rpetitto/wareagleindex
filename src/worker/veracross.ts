@@ -108,26 +108,21 @@ function getBase() {
 // Each step runs as its own Worker invocation with a fresh time budget.
 
 workflow("veracross-sync", {
-  // Step 1: fetch photos and store compact map in scratchpad
+  // Step 1: just initialize — keep scratchpad small (D1 has a per-cell size limit)
   async start(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     ctx.set("startTime", Date.now());
-
-    const base = getBase();
-    const token = await getVCToken();
-    const photos = await vcGet<VCPhoto>(base, "person_photos", token);
-
-    const photoMap: Record<string, string> = {};
-    for (const p of photos) photoMap[String(p.person_id)] = p.download_url;
-    ctx.set("photoMap", photoMap);
-
     return { step: "sync_users" };
   },
 
-  // Step 2: fetch + upsert faculty and students
+  // Step 2: fetch photos + faculty + students; upsert all in one phase
   async sync_users(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
-    const photoMap = (await ctx.get("photoMap")) as Record<string, string>;
     const base = getBase();
     const token = await getVCToken();
+
+    // Photos (kept local — never stored in scratchpad to avoid SQLITE_TOOBIG)
+    const photos = await vcGet<VCPhoto>(base, "person_photos", token);
+    const photoMap: Record<string, string> = {};
+    for (const p of photos) photoMap[String(p.person_id)] = p.download_url;
 
     // Faculty
     const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
