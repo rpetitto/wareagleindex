@@ -133,49 +133,74 @@ export default function StudentDashboard() {
                 </div>
               </div>
 
-              {/* Classes */}
-              <div className="divide-y divide-gray-50">
-                {pending.map((cls) => (
-                  <Link
-                    key={cls.id}
-                    to={
-                      group.window.type === "engagement_index"
-                        ? `/student/survey/${group.window.id}`
-                        : `/student/survey/${group.window.id}/${cls.id}`
-                    }
-                    className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors group"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900 group-hover:text-crimson transition-colors">
-                        {cls.name}
-                      </div>
-                      {cls.subject && (
-                        <div className="text-sm text-gray-400">{cls.subject}</div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-crimson">
-                      <span className="text-sm font-medium">Start</span>
+              {/* EI: single entry point — the split-panel handles class selection */}
+              {group.window.type === "engagement_index" ? (
+                <div className="px-6 py-4 flex items-center justify-between">
+                  <div className="text-sm text-gray-500">
+                    {pending.length > 0
+                      ? `${pending.length} class${pending.length !== 1 ? "es" : ""} remaining`
+                      : "All classes submitted"}
+                  </div>
+                  {pending.length > 0 ? (
+                    <Link
+                      to={`/student/survey/${group.window.id}`}
+                      className="flex items-center gap-2 bg-crimson text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-crimson-dark transition-colors"
+                    >
+                      Take Survey
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
-                    </div>
-                  </Link>
-                ))}
-                {done.map((cls) => (
-                  <div key={cls.id} className="flex items-center justify-between px-6 py-3 bg-gray-50/50">
-                    <div>
-                      <div className="font-medium text-gray-400">{cls.name}</div>
-                      {cls.subject && <div className="text-sm text-gray-300">{cls.subject}</div>}
-                    </div>
-                    <div className="flex items-center gap-1.5 text-green-600">
+                    </Link>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-green-600 text-sm font-medium">
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                         <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                       </svg>
-                      <span className="text-sm font-medium">Submitted</span>
+                      All done
                     </div>
-                  </div>
-                ))}
-              </div>
+                  )}
+                </div>
+              ) : (
+                /* MI / Dimensions: per-class rows */
+                <div className="divide-y divide-gray-50">
+                  {pending.map((cls) => (
+                    <Link
+                      key={cls.id}
+                      to={`/student/survey/${group.window.id}/${cls.id}`}
+                      className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors group"
+                    >
+                      <div>
+                        <div className="font-medium text-gray-900 group-hover:text-crimson transition-colors">
+                          {cls.name}
+                        </div>
+                        {cls.subject && (
+                          <div className="text-sm text-gray-400">{cls.subject}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-crimson">
+                        <span className="text-sm font-medium">Start</span>
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </div>
+                    </Link>
+                  ))}
+                  {done.map((cls) => (
+                    <div key={cls.id} className="flex items-center justify-between px-6 py-3 bg-gray-50/50">
+                      <div>
+                        <div className="font-medium text-gray-400">{cls.name}</div>
+                        {cls.subject && <div className="text-sm text-gray-300">{cls.subject}</div>}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-green-600">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm font-medium">Submitted</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
