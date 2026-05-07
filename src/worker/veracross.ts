@@ -46,6 +46,9 @@ interface VCPhoto {
   download_url: string;
 }
 
+export type SyncPhase = "teachers" | "students" | "enrollments";
+const PHASE_ORDER: SyncPhase[] = ["teachers", "students", "enrollments"];
+
 async function getVCToken(): Promise<string> {
   const school = secrets.get("VERACROSS_SCHOOL");
   const clientId = secrets.get("VERACROSS_CLIENT_ID");
@@ -68,7 +71,7 @@ async function getVCToken(): Promise<string> {
   return data.access_token;
 }
 
-async function vcGet<T>(base: string, path: string, token: string, maxPages = 10): Promise<T[]> {
+async function vcGet<T>(base: string, path: string, token: string, maxPages = 20): Promise<T[]> {
   const PAGE_SIZE = 1000;
   const all: T[] = [];
   let page = 1;
@@ -104,38 +107,66 @@ function getBase() {
   return `https://api.veracross.com/${school}/v3`;
 }
 
+// Veracross "school_year" is the year the school year ENDS in.
+// School years typically start in late summer (Aug) and end in late spring (May/June).
+// Using July as the rollover month is the standard convention.
+function currentSchoolYear(): number {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  return now.getUTCMonth() >= 6 ? year + 1 : year;
+}
+
+async function loadPhotoMap(base: string, token: string): Promise<Map<number, string>> {
+  const photos = await vcGet<VCPhoto>(base, "person_photos", token);
+  const map = new Map<number, string>();
+  for (const p of photos) map.set(p.person_id, p.download_url);
+  return map;
+}
+
+// Determine which step to run next based on requested phases
+function nextStep(phases: SyncPhase[], completed: SyncPhase | null): WorkflowContinuation {
+  const startIdx = completed ? PHASE_ORDER.indexOf(completed) + 1 : 0;
+  for (let i = startIdx; i < PHASE_ORDER.length; i++) {
+    if (phases.includes(PHASE_ORDER[i])) {
+      return { step: `sync_${PHASE_ORDER[i]}` };
+    }
+  }
+  return { step: "finalize" };
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
-// Each step runs as its own Worker invocation with a fresh time budget.
 
 workflow("veracross-sync", {
-  // Step 1: just initialize — keep scratchpad small (D1 has a per-cell size limit)
   async start(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     ctx.set("startTime", Date.now());
-    return { step: "sync_users" };
+    const phases = (await ctx.get("phases")) as SyncPhase[];
+    const logId = (await ctx.get("logId")) as string;
+
+    // Persist phases on the log so the UI can show progress per phase
+    await db
+      .prepare(`UPDATE sync_logs SET phases=?1 WHERE id=?2`)
+      .bind(JSON.stringify(phases), logId)
+      .run();
+
+    return nextStep(phases, null);
   },
 
-  // Step 2: fetch photos + faculty + students; upsert all in one phase
-  async sync_users(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+  async sync_teachers(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     const base = getBase();
     const token = await getVCToken();
+    const photoMap = await loadPhotoMap(base, token);
 
-    // Photos (kept local — never stored in scratchpad to avoid SQLITE_TOOBIG)
-    const photos = await vcGet<VCPhoto>(base, "person_photos", token);
-    const photoMap: Record<string, string> = {};
-    for (const p of photos) photoMap[String(p.person_id)] = p.download_url;
-
-    // Faculty
     const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
     const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
 
-    const facultyStmts = faculty.flatMap((f) => {
+    const stmts = faculty.flatMap((f) => {
       const email = (f.email_1 || f.username || "").toLowerCase().trim();
       if (!email) return [];
       const name = f.preferred_name
         ? `${f.preferred_name} ${f.last_name}`.trim()
         : `${f.first_name} ${f.last_name}`.trim();
       const vcId = String(f.id);
-      const photo = photoMap[vcId] ?? null;
+      const photo = photoMap.get(f.id) ?? null;
       return [
         db.prepare(
           `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
@@ -149,19 +180,29 @@ workflow("veracross-sync", {
         ).bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo),
       ];
     });
-    await batchRun(facultyStmts);
+    await batchRun(stmts);
 
-    // Students
+    const logId = (await ctx.get("logId")) as string;
+    await db.prepare(`UPDATE sync_logs SET teachers=?1 WHERE id=?2`).bind(faculty.length, logId).run();
+
+    return nextStep((await ctx.get("phases")) as SyncPhase[], "teachers");
+  },
+
+  async sync_students(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+    const base = getBase();
+    const token = await getVCToken();
+    const photoMap = await loadPhotoMap(base, token);
+
     const students = await vcGet<VCStudent>(base, "students", token);
 
-    const studentStmts = students.flatMap((s) => {
+    const stmts = students.flatMap((s) => {
       const email = (s.email_1 || s.username || "").toLowerCase().trim();
       if (!email) return [];
       const name = s.preferred_name
         ? `${s.preferred_name} ${s.last_name}`.trim()
         : `${s.first_name} ${s.last_name}`.trim();
       const vcId = String(s.id);
-      const photo = photoMap[vcId] ?? null;
+      const photo = photoMap.get(s.id) ?? null;
       return [
         db.prepare(
           `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
@@ -175,24 +216,24 @@ workflow("veracross-sync", {
         ).bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo),
       ];
     });
-    await batchRun(studentStmts);
+    await batchRun(stmts);
 
-    ctx.set("studentCount", students.length);
-    ctx.set("teacherCount", faculty.length);
+    const logId = (await ctx.get("logId")) as string;
+    await db.prepare(`UPDATE sync_logs SET students=?1 WHERE id=?2`).bind(students.length, logId).run();
 
-    return { step: "sync_enrollments" };
+    return nextStep((await ctx.get("phases")) as SyncPhase[], "students");
   },
 
-  // Step 3: fetch enrollments, upsert classes + enrollment links + teacher links
   async sync_enrollments(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     const base = getBase();
     const token = await getVCToken();
 
+    // Filter to current school year on the server to drop past enrollments
+    const schoolYear = currentSchoolYear();
     const allEnrollments = await vcGet<VCEnrollment>(
       base,
-      "academics/enrollments?currently_enrolled=true",
-      token,
-      1 // single page of 1000 — sufficient for this school
+      `academics/enrollments?currently_enrolled=true&school_year=${schoolYear}`,
+      token
     );
 
     const activeEnrollments = allEnrollments.filter(
@@ -202,7 +243,6 @@ workflow("veracross-sync", {
         String(e.class_status).toLowerCase() !== "future"
     );
 
-    // Unique classes
     interface ClassInfo {
       vcId: string;
       name: string;
@@ -243,7 +283,6 @@ workflow("veracross-sync", {
     );
     await batchRun(classStmts);
 
-    // Lookup maps for user/class IDs
     const userRows = await db
       .prepare(`SELECT id, veracross_id FROM users WHERE veracross_id IS NOT NULL`)
       .all<{ id: string; veracross_id: string }>();
@@ -256,7 +295,6 @@ workflow("veracross-sync", {
     const classIdByVcId = new Map<string, string>();
     for (const c of classRows.results ?? []) classIdByVcId.set(c.veracross_id, c.id);
 
-    // Enrollment links
     const enrollStmts: ReturnType<typeof db.prepare>[] = [];
     for (const e of activeEnrollments) {
       const studentUserId = userIdByVcId.get(String(e.person_id));
@@ -269,7 +307,6 @@ workflow("veracross-sync", {
     }
     await batchRun(enrollStmts);
 
-    // Teacher → class links
     const teacherLinks = await db
       .prepare(
         `SELECT c.id AS class_id, u.id AS teacher_id
@@ -285,35 +322,26 @@ workflow("veracross-sync", {
     );
     await batchRun(teacherStmts);
 
-    ctx.set("classCount", classMap.size);
-    ctx.set("enrollCount", enrollStmts.length);
-    ctx.set("teacherAssignments", teacherStmts.length);
+    const logId = (await ctx.get("logId")) as string;
+    await db
+      .prepare(`UPDATE sync_logs SET classes=?1, enrollments=?2, teacher_assignments=?3 WHERE id=?4`)
+      .bind(classMap.size, enrollStmts.length, teacherStmts.length, logId)
+      .run();
 
-    return { step: "finalize" };
+    return nextStep((await ctx.get("phases")) as SyncPhase[], "enrollments");
   },
 
-  // Step 4: write final result to sync_logs
   async finalize(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     const logId = (await ctx.get("logId")) as string;
     const startTime = (await ctx.get("startTime")) as number;
-    const studentCount = (await ctx.get("studentCount")) as number;
-    const teacherCount = (await ctx.get("teacherCount")) as number;
-    const classCount = (await ctx.get("classCount")) as number;
-    const enrollCount = (await ctx.get("enrollCount")) as number;
-    const teacherAssignments = (await ctx.get("teacherAssignments")) as number;
-
     await db
-      .prepare(
-        `UPDATE sync_logs SET status='ok', students=?1, teachers=?2, classes=?3,
-         enrollments=?4, teacher_assignments=?5, duration_ms=?6 WHERE id=?7`
-      )
-      .bind(studentCount, teacherCount, classCount, enrollCount, teacherAssignments, Date.now() - startTime, logId)
+      .prepare(`UPDATE sync_logs SET status='ok', duration_ms=?1 WHERE id=?2`)
+      .bind(Date.now() - startTime, logId)
       .run();
-
     return { done: true, result: { ok: true } };
   },
 }, { maxAttempts: 2 });
 
-export async function startSyncWorkflow(logId: string): Promise<void> {
-  await workflow.start("veracross-sync", { logId });
+export async function startSyncWorkflow(logId: string, phases: SyncPhase[]): Promise<void> {
+  await workflow.start("veracross-sync", { logId, phases });
 }

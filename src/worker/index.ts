@@ -9,7 +9,7 @@ import {
   exchangeGoogleCode,
   getAdminEmails,
 } from "./auth";
-import { startSyncWorkflow } from "./veracross";
+import { startSyncWorkflow, type SyncPhase } from "./veracross";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -743,13 +743,18 @@ app.post("/api/admin/sync", async (c) => {
     .first<{ id: string }>();
   if (alreadyRunning) return c.json({ error: "Sync already in progress" }, 409);
 
+  const body = await c.req.json<{ phases?: SyncPhase[] }>().catch(() => ({}));
+  const allPhases: SyncPhase[] = ["teachers", "students", "enrollments"];
+  const requested = (body.phases ?? allPhases).filter((p): p is SyncPhase => allPhases.includes(p));
+  if (requested.length === 0) return c.json({ error: "No phases selected" }, 400);
+
   const logId = crypto.randomUUID();
   await db
-    .prepare(`INSERT INTO sync_logs (id, status) VALUES (?1, 'running')`)
-    .bind(logId)
+    .prepare(`INSERT INTO sync_logs (id, status, phases) VALUES (?1, 'running', ?2)`)
+    .bind(logId, JSON.stringify(requested))
     .run();
 
-  await startSyncWorkflow(logId);
+  await startSyncWorkflow(logId, requested);
 
   return c.json({ ok: true });
 });
@@ -767,9 +772,9 @@ app.get("/api/admin/sync/logs", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
   const logs = await db.prepare(
-    `SELECT id, ran_at, status, students, teachers, classes, enrollments, teacher_assignments, error_message, duration_ms
+    `SELECT id, ran_at, status, students, teachers, classes, enrollments, teacher_assignments, error_message, duration_ms, phases
      FROM sync_logs ORDER BY ran_at DESC LIMIT 20`
-  ).all<{ id: string; ran_at: string; status: string; students: number; teachers: number; classes: number; enrollments: number; teacher_assignments: number; error_message: string | null; duration_ms: number }>();
+  ).all<{ id: string; ran_at: string; status: string; students: number; teachers: number; classes: number; enrollments: number; teacher_assignments: number; error_message: string | null; duration_ms: number; phases: string | null }>();
   return c.json(logs.results ?? []);
 });
 

@@ -411,6 +411,8 @@ function UsersPage() {
 
 // ─── Sync ─────────────────────────────────────────────────────────────────────
 
+type Phase = "teachers" | "students" | "enrollments";
+
 interface SyncLog {
   id: string;
   ran_at: string;
@@ -422,41 +424,108 @@ interface SyncLog {
   teacher_assignments: number | null;
   error_message: string | null;
   duration_ms: number | null;
+  phases: string | null;
+}
+
+const ALL_PHASES: { key: Phase; label: string }[] = [
+  { key: "teachers", label: "Teachers" },
+  { key: "students", label: "Students" },
+  { key: "enrollments", label: "Classes & Enrollments" },
+];
+
+function phasesOf(log: SyncLog): Phase[] {
+  if (!log.phases) return ["teachers", "students", "enrollments"];
+  try {
+    return JSON.parse(log.phases) as Phase[];
+  } catch {
+    return ["teachers", "students", "enrollments"];
+  }
+}
+
+function phaseDone(log: SyncLog, phase: Phase): boolean {
+  if (phase === "teachers") return log.teachers != null;
+  if (phase === "students") return log.students != null;
+  return log.enrollments != null; // enrollments phase populates classes+enrollments+teacher_assignments together
+}
+
+function PhaseProgress({ log }: { log: SyncLog }) {
+  const phases = phasesOf(log);
+  return (
+    <div className="space-y-2">
+      {phases.map((p) => {
+        const def = ALL_PHASES.find((x) => x.key === p)!;
+        const done = phaseDone(log, p);
+        const value =
+          p === "teachers" ? log.teachers
+            : p === "students" ? log.students
+            : log.enrollments;
+        return (
+          <div key={p} className="flex items-center gap-3">
+            <span className="w-44 text-xs text-gray-600">{def.label}</span>
+            <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-500 ${done ? "bg-green-500 w-full" : log.status === "running" ? "bg-crimson w-1/3 animate-pulse" : "bg-gray-200 w-0"}`}
+              />
+            </div>
+            <span className="w-20 text-right text-xs font-medium text-gray-700">
+              {done ? `${value ?? 0}` : log.status === "running" ? "…" : "—"}
+            </span>
+          </div>
+        );
+      })}
+      {phases.includes("enrollments") && phaseDone(log, "enrollments") && (
+        <div className="flex flex-wrap gap-4 pt-2 text-xs text-gray-500">
+          <span>{log.classes ?? 0} classes</span>
+          <span>{log.teacher_assignments ?? 0} teacher links</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SyncPage() {
   const [syncing, setSyncing] = useState(false);
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<Phase>>(new Set(["teachers", "students", "enrollments"]));
 
   function loadLogs() {
     return fetch("/api/admin/sync/logs")
       .then((r) => r.json())
-      .then((d) => { setLogs(d as SyncLog[]); setLogsLoading(false); })
+      .then((d) => {
+        const rows = d as SyncLog[];
+        setLogs(rows);
+        setLogsLoading(false);
+        setSyncing(rows.some((r) => r.status === "running"));
+      })
       .catch(() => setLogsLoading(false));
   }
 
-  // Poll every 3s while a 'running' entry exists
+  // Poll every 2s while a 'running' entry exists for snappier progress updates
   useEffect(() => {
     loadLogs();
-    const id = setInterval(() => {
-      fetch("/api/admin/sync/logs")
-        .then((r) => r.json())
-        .then((d) => {
-          const rows = d as SyncLog[];
-          setLogs(rows);
-          setLogsLoading(false);
-          const running = rows.some((r) => r.status === "running");
-          setSyncing(running);
-        })
-        .catch(() => {});
-    }, 3000);
+    const id = setInterval(loadLogs, 2000);
     return () => clearInterval(id);
   }, []);
 
+  function togglePhase(p: Phase) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }
+
   async function runSync() {
+    if (selected.size === 0) return;
     setSyncing(true);
-    await fetch("/api/admin/sync", { method: "POST" }).catch(() => {});
+    await fetch("/api/admin/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phases: [...selected] }),
+    }).catch(() => {});
+    loadLogs();
   }
 
   async function cancelSync() {
@@ -470,29 +539,62 @@ function SyncPage() {
     return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
   }
 
+  const allChecked = selected.size === ALL_PHASES.length;
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Veracross Sync</h2>
-          <p className="text-gray-500 text-sm mt-1">
-            Syncs students, teachers, classes, and enrollments. Runs are logged below.
-          </p>
+      <div className="mb-6">
+        <h2 className="text-xl font-bold text-gray-900">Veracross Sync</h2>
+        <p className="text-gray-500 text-sm mt-1">
+          Choose what to sync. Each runs as its own background job — pick any combination.
+        </p>
+      </div>
+
+      {/* Phase selection + run controls */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-sm font-semibold text-gray-700">What to sync</span>
+          <button
+            onClick={() => setSelected(allChecked ? new Set() : new Set(ALL_PHASES.map((p) => p.key)))}
+            className="text-xs text-crimson hover:text-crimson-dark font-medium"
+          >
+            {allChecked ? "Clear all" : "Select all"}
+          </button>
         </div>
+
+        <div className="grid sm:grid-cols-3 gap-2 mb-5">
+          {ALL_PHASES.map((p) => {
+            const checked = selected.has(p.key);
+            return (
+              <label
+                key={p.key}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                  checked ? "bg-crimson/5 border-crimson/30" : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => togglePhase(p.key)}
+                  disabled={syncing}
+                  className="w-4 h-4 accent-crimson"
+                />
+                <span className={`text-sm font-medium ${checked ? "text-gray-900" : "text-gray-600"}`}>
+                  {p.label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
         <div className="flex items-center gap-2">
-          {syncing && (
-            <button
-              onClick={cancelSync}
-              className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors"
-            >
-              Cancel
-            </button>
-          )}
           <button
             onClick={runSync}
-            disabled={syncing}
+            disabled={syncing || selected.size === 0}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
-              syncing ? "bg-gray-300 cursor-not-allowed" : "bg-crimson hover:bg-crimson-dark shadow-sm"
+              syncing || selected.size === 0
+                ? "bg-gray-300 cursor-not-allowed"
+                : "bg-crimson hover:bg-crimson-dark shadow-sm"
             }`}
           >
             {syncing ? (
@@ -508,10 +610,18 @@ function SyncPage() {
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
-                Run Veracross Sync
+                {selected.size === ALL_PHASES.length ? "Sync All" : `Sync ${selected.size}`}
               </>
             )}
           </button>
+          {syncing && (
+            <button
+              onClick={cancelSync}
+              className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
         </div>
       </div>
 
@@ -529,7 +639,7 @@ function SyncPage() {
           <div className="divide-y divide-gray-50">
             {logs.map((log) => (
               <div key={log.id} className="px-5 py-4">
-                <div className="flex items-center gap-3 mb-2">
+                <div className="flex items-center gap-3 mb-3">
                   <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
                     log.status === "ok" ? "bg-green-100 text-green-700"
                     : log.status === "running" ? "bg-yellow-100 text-yellow-700"
@@ -559,25 +669,12 @@ function SyncPage() {
                   )}
                 </div>
 
-                {log.status === "ok" ? (
-                  <div className="flex flex-wrap gap-4">
-                    {([
-                      ["Students", log.students],
-                      ["Teachers", log.teachers],
-                      ["Classes", log.classes],
-                      ["Enrollments", log.enrollments],
-                      ["Teacher links", log.teacher_assignments],
-                    ] as [string, number | null][]).map(([label, val]) => (
-                      <div key={label} className="text-center">
-                        <div className="text-lg font-bold text-gray-900">{val ?? "—"}</div>
-                        <div className="text-xs text-gray-400">{label}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-red-600 font-mono bg-red-50 rounded-lg px-3 py-2 mt-1">
+                {log.status === "error" && log.error_message ? (
+                  <p className="text-sm text-red-600 font-mono bg-red-50 rounded-lg px-3 py-2">
                     {log.error_message}
                   </p>
+                ) : (
+                  <PhaseProgress log={log} />
                 )}
               </div>
             ))}

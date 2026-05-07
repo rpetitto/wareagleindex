@@ -17,6 +17,12 @@ migrate("003_sync_logs", async () => {
   `).run();
 });
 
+migrate("004_sync_phases", async () => {
+  try {
+    await db.prepare(`ALTER TABLE sync_logs ADD COLUMN phases TEXT`).run();
+  } catch { /* column already exists */ }
+});
+
 migrate("002_classes_teacher_fields", async () => {
   // Add teacher info columns to classes (safe if already exists)
   try {
