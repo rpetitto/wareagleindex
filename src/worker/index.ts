@@ -677,6 +677,78 @@ app.put("/api/admin/surveys/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/api/admin/surveys/:windowId/detail", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { windowId } = c.req.param();
+
+  const win = await db
+    .prepare(`SELECT id, name, type, opens_at, closes_at, target_all FROM survey_windows WHERE id = ?1`)
+    .bind(windowId)
+    .first<{ id: string; name: string; type: string; opens_at: string; closes_at: string; target_all: number }>();
+  if (!win) return c.json({ error: "Not found" }, 404);
+
+  // Eligible students
+  let eligible: number;
+  if (win.target_all === 1) {
+    const row = await db.prepare(`SELECT COUNT(DISTINCT student_id) as cnt FROM enrollments`).first<{ cnt: number }>();
+    eligible = row?.cnt ?? 0;
+  } else {
+    const row = await db
+      .prepare(
+        `SELECT COUNT(DISTINCT e.student_id) as cnt
+         FROM enrollments e JOIN survey_window_classes swc ON swc.class_id = e.class_id
+         WHERE swc.survey_window_id = ?1`
+      )
+      .bind(windowId)
+      .first<{ cnt: number }>();
+    eligible = row?.cnt ?? 0;
+  }
+
+  // Responses
+  let responses: unknown[] = [];
+  if (win.type === "engagement_index") {
+    const rows = await db
+      .prepare(
+        `SELECT er.student_id,
+                COALESCE(er.student_name, u.name) as student_name,
+                er.class_id,
+                COALESCE(er.class_name, c.name) as class_name,
+                COALESCE(er.teacher_name, c.primary_teacher_name) as teacher_name,
+                er.challenge, er.love, er.submitted_at
+         FROM engagement_responses er
+         LEFT JOIN users u ON u.id = er.student_id
+         LEFT JOIN classes c ON c.id = er.class_id
+         WHERE er.survey_window_id = ?1
+         ORDER BY er.submitted_at DESC`
+      )
+      .bind(windowId)
+      .all();
+    responses = rows.results ?? [];
+  } else if (win.type === "mattering_index") {
+    const rows = await db
+      .prepare(
+        `SELECT mr.student_id,
+                COALESCE(mr.student_name, u.name) as student_name,
+                mr.class_id,
+                COALESCE(mr.class_name, c.name) as class_name,
+                COALESCE(mr.teacher_name, c.primary_teacher_name) as teacher_name,
+                mr.connection, mr.contribution, mr.submitted_at
+         FROM mattering_responses mr
+         LEFT JOIN users u ON u.id = mr.student_id
+         LEFT JOIN classes c ON c.id = mr.class_id
+         WHERE mr.survey_window_id = ?1
+         ORDER BY mr.submitted_at DESC`
+      )
+      .bind(windowId)
+      .all();
+    responses = rows.results ?? [];
+  }
+
+  return c.json({ window: win, eligible, responses });
+});
+
 app.delete("/api/admin/surveys/:id", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
