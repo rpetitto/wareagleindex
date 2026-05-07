@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import NavBar from "../components/NavBar";
 import SlideOver from "../components/SlideOver";
-import QuadrantScatter from "../components/QuadrantScatter";
+import TeacherOverviewCard, { type TeacherOverviewData } from "../components/TeacherOverviewCard";
 import { TeacherClassDetailContent } from "./TeacherClassDetail";
 
 interface ClassWindow {
@@ -32,15 +32,6 @@ interface TeacherClass {
   windows: ClassWindow[];
   sy_ei: SyStat | null;
   sy_mi: SyStat | null;
-}
-
-interface TeacherOverview {
-  school_year: {
-    ei: { avg_c: number | null; avg_l: number | null; cnt: number; win_cnt: number; class_cnt: number } | null;
-    mi: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
-    ei_points: { challenge: number; love: number }[];
-    since: string;
-  };
 }
 
 const TYPE_BADGE: Record<string, string> = {
@@ -74,115 +65,9 @@ function MiniBar({ value, max, color }: { value: number | null; max: number; col
   );
 }
 
-function OverviewCard({ overview }: { overview: TeacherOverview }) {
-  const [expanded, setExpanded] = useState(false);
-  const sy = overview.school_year;
-  const hasEi = sy.ei && (sy.ei.avg_c != null || sy.ei.avg_l != null);
-  const hasMi = sy.mi && (sy.mi.avg_c != null || sy.mi.avg_l != null);
-  const hasAny = hasEi || hasMi;
-
-  if (!hasAny) return null;
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm mb-6 overflow-hidden">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full px-6 py-4 flex items-center justify-between text-left"
-      >
-        <div>
-          <h2 className="font-semibold text-gray-900">This School Year — All My Classes</h2>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {sy.ei?.cnt ?? 0} EI response{(sy.ei?.cnt ?? 0) !== 1 ? "s" : ""} ·{" "}
-            {sy.mi?.cnt ?? 0} MI response{(sy.mi?.cnt ?? 0) !== 1 ? "s" : ""} ·{" "}
-            {sy.ei?.win_cnt ?? 0} window{(sy.ei?.win_cnt ?? 0) !== 1 ? "s" : ""} ·{" "}
-            {sy.ei?.class_cnt ?? 0} class{(sy.ei?.class_cnt ?? 0) !== 1 ? "es" : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          {hasEi && (
-            <div className="text-right hidden sm:block">
-              <div className="text-xs text-gray-400">EI avg</div>
-              <div className="text-sm font-semibold text-gray-800">
-                {sy.ei!.avg_c?.toFixed(1)} / {sy.ei!.avg_l?.toFixed(1)}
-              </div>
-            </div>
-          )}
-          {hasMi && (
-            <div className="text-right hidden sm:block">
-              <div className="text-xs text-gray-400">MI avg</div>
-              <div className="text-sm font-semibold text-gray-800">
-                {sy.mi!.avg_c?.toFixed(1)} / {sy.mi!.avg_l?.toFixed(1)}
-              </div>
-            </div>
-          )}
-          <svg
-            className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="border-t border-gray-50 px-6 py-5">
-          <div className="grid sm:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              {hasEi && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Engagement Index</p>
-                  <div className="space-y-1.5">
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-                        <span>Challenge</span><span>/ 10</span>
-                      </div>
-                      <MiniBar value={sy.ei!.avg_c} max={10} color="bg-green-400" />
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-                        <span>Love</span><span>/ 10</span>
-                      </div>
-                      <MiniBar value={sy.ei!.avg_l} max={10} color="bg-green-400" />
-                    </div>
-                  </div>
-                </div>
-              )}
-              {hasMi && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Mattering Index</p>
-                  <div className="space-y-1.5">
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-                        <span>Connection</span><span>/ 5</span>
-                      </div>
-                      <MiniBar value={sy.mi!.avg_c} max={5} color="bg-blue-400" />
-                    </div>
-                    <div>
-                      <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-                        <span>Contribution</span><span>/ 5</span>
-                      </div>
-                      <MiniBar value={sy.mi!.avg_l} max={5} color="bg-blue-400" />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-            {sy.ei_points.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Engagement Scatter</p>
-                <QuadrantScatter responses={sy.ei_points} />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function TeacherDashboard() {
   const [classes, setClasses] = useState<TeacherClass[]>([]);
-  const [overview, setOverview] = useState<TeacherOverview | null>(null);
+  const [overview, setOverview] = useState<TeacherOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
 
@@ -216,7 +101,11 @@ export default function TeacherDashboard() {
 
         {loading && <div className="text-center text-gray-400 py-12">Loading…</div>}
 
-        {!loading && overview && <OverviewCard overview={overview} />}
+        {!loading && overview && (
+          <div className="mb-6">
+            <TeacherOverviewCard overview={overview} title="This School Year — All My Classes" />
+          </div>
+        )}
 
         {!loading && classes.length === 0 && (
           <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">

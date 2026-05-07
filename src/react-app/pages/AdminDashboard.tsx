@@ -3,6 +3,7 @@ import { Routes, Route, Link, useLocation, useNavigate, useParams, Navigate } fr
 import NavBar from "../components/NavBar";
 import QuadrantScatter from "../components/QuadrantScatter";
 import SlideOver from "../components/SlideOver";
+import TeacherOverviewCard, { type TeacherOverviewData } from "../components/TeacherOverviewCard";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 
@@ -802,13 +803,24 @@ function ResponseSummary({ r }: { r: UserResponse }) {
 function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () => void }) {
   const navigate = useNavigate();
   const [data, setData] = useState<UserProfileData | null>(null);
+  const [overview, setOverview] = useState<TeacherOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
-      .then((d) => { setData(d as UserProfileData); setLoading(false); })
+      .then((d) => {
+        const profile = d as UserProfileData;
+        setData(profile);
+        setLoading(false);
+        if (profile?.profile?.role === "teacher" || profile?.profile?.role === "admin") {
+          fetch(`/api/admin/users/${userId}/overview`)
+            .then((r) => r.json())
+            .then((ov) => setOverview(ov as TeacherOverviewData))
+            .catch(() => {});
+        }
+      })
       .catch(() => setLoading(false));
   }, [userId]);
 
@@ -898,6 +910,13 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
             </div>
           </div>
         )
+      )}
+
+      {/* Teacher overview card */}
+      {isTeacher && overview && (
+        <div className="mt-4">
+          <TeacherOverviewCard overview={overview} title={`This School Year — ${profile.name}'s Classes`} />
+        </div>
       )}
 
       {/* Student view: classes + responses */}

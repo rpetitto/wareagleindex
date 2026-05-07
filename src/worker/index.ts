@@ -731,6 +731,53 @@ app.patch("/api/admin/users/:id/role", async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/api/admin/users/:userId/overview", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { userId } = c.req.param();
+  const syStart = syStartDate();
+
+  const ei = await db
+    .prepare(
+      `SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt,
+              COUNT(DISTINCT er.survey_window_id) as win_cnt,
+              COUNT(DISTINCT er.class_id) as class_cnt
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = er.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(userId, syStart)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number; win_cnt: number; class_cnt: number }>();
+
+  const mi = await db
+    .prepare(
+      `SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt
+       FROM mattering_responses mr
+       JOIN survey_windows sw ON sw.id = mr.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = mr.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(userId, syStart)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+
+  const eiPoints = await db
+    .prepare(
+      `SELECT er.challenge, er.love
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN teacher_classes tc ON tc.class_id = er.class_id AND tc.teacher_id = ?1
+       WHERE datetime(sw.opens_at) >= ?2`
+    )
+    .bind(userId, syStart)
+    .all<{ challenge: number; love: number }>();
+
+  return c.json({
+    school_year: { ei, mi, ei_points: eiPoints.results ?? [], since: syStart },
+  });
+});
+
 app.get("/api/admin/users/:userId/profile", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
