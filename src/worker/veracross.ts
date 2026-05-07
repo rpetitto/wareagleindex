@@ -81,6 +81,15 @@ interface VCClassSchedule {
   grading_period?: { id: number; description: string; abbreviation: string } | null;
 }
 
+interface VCGradingPeriod {
+  id: number;
+  description: string;
+  abbreviation: string;
+  start_date: string | null;
+  end_date: string | null;
+  school_year: number;
+}
+
 export type SyncPhase = "teachers" | "students" | "enrollments";
 const PHASE_ORDER: SyncPhase[] = ["teachers", "students", "enrollments"];
 
@@ -96,7 +105,7 @@ async function getVCToken(): Promise<string> {
       grant_type: "client_credentials",
       client_id: clientId,
       client_secret: clientSecret,
-      scope: "students:list staff_faculty:list academics.enrollments:list academics.class_schedules:list person_photos:list",
+      scope: "students:list staff_faculty:list academics.enrollments:list academics.class_schedules:list academics.config.grading_periods:list person_photos:list",
     }),
   });
 
@@ -275,7 +284,33 @@ workflow("veracross-sync", {
     // skip the allowlist (fail-soft) — the regex filter still rejects most
     // non-academic classes.
     const schoolYear = currentSchoolYear();
+
+    // Fetch grading periods so we know each period's date range.
+    // Used to populate begin_date/end_date on classes (fail-soft).
+    const gpDates = new Map<number, { begin_date: string; end_date: string }>();
+    try {
+      const gps = await vcGet<VCGradingPeriod>(
+        base,
+        `academics/config/grading_periods?school_year=${schoolYear}`,
+        token,
+        1
+      );
+      for (const gp of gps) {
+        if (gp.start_date && gp.end_date) {
+          gpDates.set(gp.id, { begin_date: gp.start_date, end_date: gp.end_date });
+        }
+      }
+      console.log(`grading_periods: ${gpDates.size} with dates for school_year=${schoolYear}`);
+    } catch (err) {
+      console.warn(`grading_periods fetch failed:`, err);
+    }
+
+    // class_schedules: allowlist of internal_class_id values for the current
+    // school year, and a map of class → grading period date range.
+    // A class may span multiple grading periods (full-year class); store
+    // min(start_date) and max(end_date) across all its periods.
     let scheduledClassIds: Set<number> | null = null;
+    const classDateRange = new Map<number, { begin_date: string; end_date: string }>();
     try {
       const schedules = await vcGet<VCClassSchedule>(
         base,
@@ -286,8 +321,24 @@ workflow("veracross-sync", {
       console.log(`class_schedules: ${schedules.length} rows for school_year=${schoolYear}`);
       if (schedules.length > 0) {
         scheduledClassIds = new Set<number>();
-        for (const s of schedules) scheduledClassIds.add(s.internal_class_id);
-        console.log(`class_schedules allowlist: ${scheduledClassIds.size} unique class ids`);
+        for (const s of schedules) {
+          scheduledClassIds.add(s.internal_class_id);
+          const gpId = s.grading_period?.id;
+          if (gpId && gpDates.has(gpId)) {
+            const { begin_date, end_date } = gpDates.get(gpId)!;
+            const existing = classDateRange.get(s.internal_class_id);
+            if (!existing) {
+              classDateRange.set(s.internal_class_id, { begin_date, end_date });
+            } else {
+              // expand range to cover all grading periods this class appears in
+              classDateRange.set(s.internal_class_id, {
+                begin_date: begin_date < existing.begin_date ? begin_date : existing.begin_date,
+                end_date: end_date > existing.end_date ? end_date : existing.end_date,
+              });
+            }
+          }
+        }
+        console.log(`class_schedules allowlist: ${scheduledClassIds.size} unique class ids, ${classDateRange.size} with date ranges`);
       }
     } catch (err) {
       console.warn(`class_schedules fetch failed, skipping allowlist:`, err);
@@ -315,6 +366,8 @@ workflow("veracross-sync", {
       gradeLevel: string | null;
       teacherVcId: string | null;
       teacherName: string | null;
+      beginDate: string | null;
+      endDate: string | null;
     }
     const classMap = new Map<number, ClassInfo>();
     for (const e of activeEnrollments) {
@@ -327,25 +380,30 @@ workflow("veracross-sync", {
             e.primary_teacher.last_name?.trim()
           ).trim()
         : null;
+      const dates = classDateRange.get(e.internal_class_id);
       classMap.set(e.internal_class_id, {
         vcId: String(e.internal_class_id),
         name: e.class_description,
         gradeLevel: e.grade_level_id != null ? String(e.grade_level_id) : null,
         teacherVcId,
         teacherName,
+        beginDate: dates?.begin_date ?? null,
+        endDate: dates?.end_date ?? null,
       });
     }
 
     const classStmts = [...classMap.values()].map((cls) =>
       db.prepare(
-        `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name, begin_date, end_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(veracross_id) DO UPDATE SET
            name = excluded.name,
            grade_level = excluded.grade_level,
            primary_teacher_vc_id = excluded.primary_teacher_vc_id,
-           primary_teacher_name = excluded.primary_teacher_name`
-      ).bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
+           primary_teacher_name = excluded.primary_teacher_name,
+           begin_date = excluded.begin_date,
+           end_date = excluded.end_date`
+      ).bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName, cls.beginDate, cls.endDate)
     );
     await batchRun(classStmts);
 

@@ -105,12 +105,12 @@ app.get("/api/student/surveys", async (c) => {
 
   const classes = await db
     .prepare(
-      `SELECT c.id, c.name, c.subject, c.grade_level
+      `SELECT c.id, c.name, c.subject, c.grade_level, c.begin_date, c.end_date
        FROM enrollments e JOIN classes c ON c.id = e.class_id
        WHERE e.student_id = ?1 ORDER BY c.name`
     )
     .bind(user.id)
-    .all<{ id: string; name: string; subject: string | null; grade_level: string | null }>();
+    .all<{ id: string; name: string; subject: string | null; grade_level: string | null; begin_date: string | null; end_date: string | null }>();
 
   const windows = await db
     .prepare(
@@ -124,6 +124,12 @@ app.get("/api/student/surveys", async (c) => {
   for (const win of windows.results) {
     const entries = [];
     for (const cls of classes.results) {
+      // If the class has a known date range, skip it when the window opens
+      // outside that range (semester-1 class appearing in a semester-2 window).
+      if (cls.begin_date && cls.end_date) {
+        if (win.opens_at < cls.begin_date || win.opens_at > cls.end_date) continue;
+      }
+
       // Check if window targets this class
       const applies =
         (await db

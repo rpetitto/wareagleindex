@@ -23,6 +23,15 @@ migrate("004_sync_phases", async () => {
   } catch { /* column already exists */ }
 });
 
+migrate("006_class_date_range", async () => {
+  try {
+    await db.prepare(`ALTER TABLE classes ADD COLUMN begin_date TEXT`).run();
+  } catch { /* column already exists */ }
+  try {
+    await db.prepare(`ALTER TABLE classes ADD COLUMN end_date TEXT`).run();
+  } catch { /* column already exists */ }
+});
+
 migrate("005_synced_at_columns", async () => {
   try {
     await db.prepare(`ALTER TABLE enrollments ADD COLUMN last_synced_at TEXT`).run();
