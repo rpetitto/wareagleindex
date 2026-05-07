@@ -9,7 +9,7 @@ import {
   exchangeGoogleCode,
   getAdminEmails,
 } from "./auth";
-import { syncVeracross } from "./veracross";
+import { startSyncWorkflow } from "./veracross";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -463,9 +463,10 @@ app.get("/api/admin/overview", async (c) => {
       db.prepare(`SELECT COUNT(*) as cnt FROM users WHERE role = 'teacher'`).first<{ cnt: number }>(),
       db.prepare(`SELECT COUNT(*) as cnt FROM classes`).first<{ cnt: number }>(),
       db.prepare(`SELECT COUNT(*) as cnt FROM survey_windows`).first<{ cnt: number }>(),
-      db.prepare(`SELECT COUNT(*) as cnt FROM engagement_responses`).first<{ cnt: number }>(),
-      db.prepare(`SELECT COUNT(*) as cnt FROM mattering_responses`).first<{ cnt: number }>(),
-      db.prepare(`SELECT COUNT(*) as cnt FROM dimension_responses`).first<{ cnt: number }>(),
+      // Count distinct (student, window) pairs — one submission per student per survey
+      db.prepare(`SELECT COUNT(DISTINCT student_id || '|' || survey_window_id) as cnt FROM engagement_responses`).first<{ cnt: number }>(),
+      db.prepare(`SELECT COUNT(DISTINCT student_id || '|' || survey_window_id) as cnt FROM mattering_responses`).first<{ cnt: number }>(),
+      db.prepare(`SELECT COUNT(DISTINCT student_id || '|' || survey_window_id) as cnt FROM dimension_responses`).first<{ cnt: number }>(),
     ]);
 
   const activeWindows = await db
@@ -748,26 +749,7 @@ app.post("/api/admin/sync", async (c) => {
     .bind(logId)
     .run();
 
-  const start = Date.now();
-  c.executionCtx.waitUntil(
-    syncVeracross()
-      .then((result) =>
-        db
-          .prepare(
-            `UPDATE sync_logs SET status='ok', students=?1, teachers=?2, classes=?3,
-             enrollments=?4, teacher_assignments=?5, duration_ms=?6 WHERE id=?7`
-          )
-          .bind(result.students, result.teachers, result.classes, result.enrollments, result.teacherAssignments, Date.now() - start, logId)
-          .run()
-      )
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : "Sync failed";
-        return db
-          .prepare(`UPDATE sync_logs SET status='error', error_message=?1, duration_ms=?2 WHERE id=?3`)
-          .bind(message, Date.now() - start, logId)
-          .run();
-      })
-  );
+  await startSyncWorkflow(logId);
 
   return c.json({ ok: true });
 });

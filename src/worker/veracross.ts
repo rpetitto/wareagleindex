@@ -1,4 +1,4 @@
-import { db, secrets } from "flingit";
+import { db, secrets, workflow, type WorkflowContinuation, type WorkflowCtx } from "flingit";
 
 interface VCStudent {
   id: number;
@@ -93,187 +93,232 @@ async function vcGet<T>(base: string, path: string, token: string, maxPages = 10
   return all;
 }
 
-// Execute prepared statements in batches to avoid D1 per-request limits
 async function batchRun(stmts: ReturnType<typeof db.prepare>[], size = 100) {
   for (let i = 0; i < stmts.length; i += size) {
     await db.batch(stmts.slice(i, i + size));
   }
 }
 
-export interface SyncResult {
-  students: number;
-  teachers: number;
-  classes: number;
-  enrollments: number;
-  teacherAssignments: number;
+function getBase() {
+  const school = secrets.get("VERACROSS_SCHOOL");
+  return `https://api.veracross.com/${school}/v3`;
 }
 
-export async function syncVeracross(): Promise<SyncResult> {
-  const school = secrets.get("VERACROSS_SCHOOL");
-  const base = `https://api.veracross.com/${school}/v3`;
-  const token = await getVCToken();
+// ── Workflow ──────────────────────────────────────────────────────────────────
+// Each step runs as its own Worker invocation with a fresh time budget.
 
-  // ── 1. Photos ─────────────────────────────────────────────────────────────
-  const photos = await vcGet<VCPhoto>(base, "person_photos", token);
-  const photoByPersonId = new Map<number, string>();
-  for (const p of photos) photoByPersonId.set(p.person_id, p.download_url);
+workflow("veracross-sync", {
+  // Step 1: fetch photos and store compact map in scratchpad
+  async start(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+    ctx.set("startTime", Date.now());
 
-  // ── 2. Faculty — batch upsert ─────────────────────────────────────────────
-  const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
-  const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
+    const base = getBase();
+    const token = await getVCToken();
+    const photos = await vcGet<VCPhoto>(base, "person_photos", token);
 
-  const facultyStmts = faculty.flatMap((f) => {
-    const email = (f.email_1 || f.username || "").toLowerCase().trim();
-    if (!email) return [];
-    const name = f.preferred_name
-      ? `${f.preferred_name} ${f.last_name}`.trim()
-      : `${f.first_name} ${f.last_name}`.trim();
-    const vcId = String(f.id);
-    const photo = photoByPersonId.get(f.id) ?? null;
-    return [
-      db.prepare(
-        `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
-         VALUES (?1, ?2, ?3, ?4, 'teacher', ?5, ?6)
-         ON CONFLICT(email) DO UPDATE SET
-           name = excluded.name,
-           veracross_id = excluded.veracross_id,
-           role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'teacher' END,
-           picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
-           updated_at = datetime('now')`
-      ).bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo),
-    ];
-  });
-  await batchRun(facultyStmts);
+    const photoMap: Record<string, string> = {};
+    for (const p of photos) photoMap[String(p.person_id)] = p.download_url;
+    ctx.set("photoMap", photoMap);
 
-  // ── 3. Students — batch upsert ────────────────────────────────────────────
-  const students = await vcGet<VCStudent>(base, "students", token);
+    return { step: "sync_users" };
+  },
 
-  const studentStmts = students.flatMap((s) => {
-    const email = (s.email_1 || s.username || "").toLowerCase().trim();
-    if (!email) return [];
-    const name = s.preferred_name
-      ? `${s.preferred_name} ${s.last_name}`.trim()
-      : `${s.first_name} ${s.last_name}`.trim();
-    const vcId = String(s.id);
-    const photo = photoByPersonId.get(s.id) ?? null;
-    return [
-      db.prepare(
-        `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
-         VALUES (?1, ?2, ?3, ?4, 'student', ?5, ?6)
-         ON CONFLICT(email) DO UPDATE SET
-           name = excluded.name,
-           veracross_id = excluded.veracross_id,
-           picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
-           updated_at = datetime('now')
-         WHERE role != 'admin'`
-      ).bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo),
-    ];
-  });
-  await batchRun(studentStmts);
+  // Step 2: fetch + upsert faculty and students
+  async sync_users(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+    const photoMap = (await ctx.get("photoMap")) as Record<string, string>;
+    const base = getBase();
+    const token = await getVCToken();
 
-  // ── 4. All enrollments in one paginated request ───────────────────────────
-  const allEnrollments = await vcGet<VCEnrollment>(
-    base,
-    "academics/enrollments?currently_enrolled=true",
-    token,
-    1  // one page of 1000 is sufficient; avoids slow multi-page iteration on this endpoint
-  );
-  const activeEnrollments = allEnrollments.filter(
-    (e) =>
-      e.currently_enrolled &&
-      e.exclude_from_transcript !== true &&
-      String(e.class_status).toLowerCase() !== "future"
-  );
+    // Faculty
+    const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
+    const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
 
-  // ── 5. Collect unique classes ─────────────────────────────────────────────
-  interface ClassInfo {
-    vcId: string;
-    name: string;
-    gradeLevel: string | null;
-    teacherVcId: string | null;
-    teacherName: string | null;
-  }
-  const classMap = new Map<number, ClassInfo>();
-  for (const e of activeEnrollments) {
-    if (classMap.has(e.internal_class_id)) continue;
-    const teacherVcId = e.primary_teacher?.id ? String(e.primary_teacher.id) : null;
-    const teacherName = e.primary_teacher
-      ? (
-          (e.primary_teacher.preferred_name?.trim() || e.primary_teacher.first_name?.trim()) +
-          " " +
-          e.primary_teacher.last_name?.trim()
-        ).trim()
-      : null;
-    classMap.set(e.internal_class_id, {
-      vcId: String(e.internal_class_id),
-      name: e.class_description,
-      gradeLevel: e.grade_level_id != null ? String(e.grade_level_id) : null,
-      teacherVcId,
-      teacherName,
+    const facultyStmts = faculty.flatMap((f) => {
+      const email = (f.email_1 || f.username || "").toLowerCase().trim();
+      if (!email) return [];
+      const name = f.preferred_name
+        ? `${f.preferred_name} ${f.last_name}`.trim()
+        : `${f.first_name} ${f.last_name}`.trim();
+      const vcId = String(f.id);
+      const photo = photoMap[vcId] ?? null;
+      return [
+        db.prepare(
+          `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
+           VALUES (?1, ?2, ?3, ?4, 'teacher', ?5, ?6)
+           ON CONFLICT(email) DO UPDATE SET
+             name = excluded.name,
+             veracross_id = excluded.veracross_id,
+             role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'teacher' END,
+             picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
+             updated_at = datetime('now')`
+        ).bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo),
+      ];
     });
-  }
+    await batchRun(facultyStmts);
 
-  // ── 6. Batch upsert classes ───────────────────────────────────────────────
-  const classStmts = [...classMap.values()].map((cls) =>
-    db.prepare(
-      `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-       ON CONFLICT(veracross_id) DO UPDATE SET
-         name = excluded.name,
-         grade_level = excluded.grade_level,
-         primary_teacher_vc_id = excluded.primary_teacher_vc_id,
-         primary_teacher_name = excluded.primary_teacher_name`
-    ).bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
-  );
-  await batchRun(classStmts);
+    // Students
+    const students = await vcGet<VCStudent>(base, "students", token);
 
-  // ── 7. Build lookup maps ──────────────────────────────────────────────────
-  const userRows = await db
-    .prepare(`SELECT id, veracross_id FROM users WHERE veracross_id IS NOT NULL`)
-    .all<{ id: string; veracross_id: string }>();
-  const userIdByVcId = new Map<string, string>();
-  for (const u of userRows.results ?? []) userIdByVcId.set(u.veracross_id, u.id);
+    const studentStmts = students.flatMap((s) => {
+      const email = (s.email_1 || s.username || "").toLowerCase().trim();
+      if (!email) return [];
+      const name = s.preferred_name
+        ? `${s.preferred_name} ${s.last_name}`.trim()
+        : `${s.first_name} ${s.last_name}`.trim();
+      const vcId = String(s.id);
+      const photo = photoMap[vcId] ?? null;
+      return [
+        db.prepare(
+          `INSERT INTO users (id, google_id, email, name, role, veracross_id, picture)
+           VALUES (?1, ?2, ?3, ?4, 'student', ?5, ?6)
+           ON CONFLICT(email) DO UPDATE SET
+             name = excluded.name,
+             veracross_id = excluded.veracross_id,
+             picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
+             updated_at = datetime('now')
+           WHERE role != 'admin'`
+        ).bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo),
+      ];
+    });
+    await batchRun(studentStmts);
 
-  const classRows = await db
-    .prepare(`SELECT id, veracross_id FROM classes WHERE veracross_id IS NOT NULL`)
-    .all<{ id: string; veracross_id: string }>();
-  const classIdByVcId = new Map<string, string>();
-  for (const c of classRows.results ?? []) classIdByVcId.set(c.veracross_id, c.id);
+    ctx.set("studentCount", students.length);
+    ctx.set("teacherCount", faculty.length);
 
-  // ── 8. Batch insert enrollment links ──────────────────────────────────────
-  const enrollStmts: ReturnType<typeof db.prepare>[] = [];
-  for (const e of activeEnrollments) {
-    const studentUserId = userIdByVcId.get(String(e.person_id));
-    const classId = classIdByVcId.get(String(e.internal_class_id));
-    if (!studentUserId || !classId) continue;
-    enrollStmts.push(
-      db.prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
-        .bind(crypto.randomUUID(), studentUserId, classId)
+    return { step: "sync_enrollments" };
+  },
+
+  // Step 3: fetch enrollments, upsert classes + enrollment links + teacher links
+  async sync_enrollments(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+    const base = getBase();
+    const token = await getVCToken();
+
+    const allEnrollments = await vcGet<VCEnrollment>(
+      base,
+      "academics/enrollments?currently_enrolled=true",
+      token,
+      1 // single page of 1000 — sufficient for this school
     );
-  }
-  await batchRun(enrollStmts);
 
-  // ── 9. Batch link teachers to classes ─────────────────────────────────────
-  const teacherLinks = await db
-    .prepare(
-      `SELECT c.id AS class_id, u.id AS teacher_id
-       FROM classes c
-       JOIN users u ON u.veracross_id = c.primary_teacher_vc_id
-       WHERE u.role IN ('teacher', 'admin') AND c.primary_teacher_vc_id IS NOT NULL`
-    )
-    .all<{ class_id: string; teacher_id: string }>();
+    const activeEnrollments = allEnrollments.filter(
+      (e) =>
+        e.currently_enrolled &&
+        e.exclude_from_transcript !== true &&
+        String(e.class_status).toLowerCase() !== "future"
+    );
 
-  const teacherStmts = (teacherLinks.results ?? []).map((link) =>
-    db.prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
-      .bind(crypto.randomUUID(), link.teacher_id, link.class_id)
-  );
-  await batchRun(teacherStmts);
+    // Unique classes
+    interface ClassInfo {
+      vcId: string;
+      name: string;
+      gradeLevel: string | null;
+      teacherVcId: string | null;
+      teacherName: string | null;
+    }
+    const classMap = new Map<number, ClassInfo>();
+    for (const e of activeEnrollments) {
+      if (classMap.has(e.internal_class_id)) continue;
+      const teacherVcId = e.primary_teacher?.id ? String(e.primary_teacher.id) : null;
+      const teacherName = e.primary_teacher
+        ? (
+            (e.primary_teacher.preferred_name?.trim() || e.primary_teacher.first_name?.trim()) +
+            " " +
+            e.primary_teacher.last_name?.trim()
+          ).trim()
+        : null;
+      classMap.set(e.internal_class_id, {
+        vcId: String(e.internal_class_id),
+        name: e.class_description,
+        gradeLevel: e.grade_level_id != null ? String(e.grade_level_id) : null,
+        teacherVcId,
+        teacherName,
+      });
+    }
 
-  return {
-    students: students.length,
-    teachers: faculty.length,
-    classes: classMap.size,
-    enrollments: enrollStmts.length,
-    teacherAssignments: teacherStmts.length,
-  };
+    const classStmts = [...classMap.values()].map((cls) =>
+      db.prepare(
+        `INSERT INTO classes (id, veracross_id, name, grade_level, primary_teacher_vc_id, primary_teacher_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(veracross_id) DO UPDATE SET
+           name = excluded.name,
+           grade_level = excluded.grade_level,
+           primary_teacher_vc_id = excluded.primary_teacher_vc_id,
+           primary_teacher_name = excluded.primary_teacher_name`
+      ).bind(crypto.randomUUID(), cls.vcId, cls.name, cls.gradeLevel, cls.teacherVcId, cls.teacherName)
+    );
+    await batchRun(classStmts);
+
+    // Lookup maps for user/class IDs
+    const userRows = await db
+      .prepare(`SELECT id, veracross_id FROM users WHERE veracross_id IS NOT NULL`)
+      .all<{ id: string; veracross_id: string }>();
+    const userIdByVcId = new Map<string, string>();
+    for (const u of userRows.results ?? []) userIdByVcId.set(u.veracross_id, u.id);
+
+    const classRows = await db
+      .prepare(`SELECT id, veracross_id FROM classes WHERE veracross_id IS NOT NULL`)
+      .all<{ id: string; veracross_id: string }>();
+    const classIdByVcId = new Map<string, string>();
+    for (const c of classRows.results ?? []) classIdByVcId.set(c.veracross_id, c.id);
+
+    // Enrollment links
+    const enrollStmts: ReturnType<typeof db.prepare>[] = [];
+    for (const e of activeEnrollments) {
+      const studentUserId = userIdByVcId.get(String(e.person_id));
+      const classId = classIdByVcId.get(String(e.internal_class_id));
+      if (!studentUserId || !classId) continue;
+      enrollStmts.push(
+        db.prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
+          .bind(crypto.randomUUID(), studentUserId, classId)
+      );
+    }
+    await batchRun(enrollStmts);
+
+    // Teacher → class links
+    const teacherLinks = await db
+      .prepare(
+        `SELECT c.id AS class_id, u.id AS teacher_id
+         FROM classes c
+         JOIN users u ON u.veracross_id = c.primary_teacher_vc_id
+         WHERE u.role IN ('teacher', 'admin') AND c.primary_teacher_vc_id IS NOT NULL`
+      )
+      .all<{ class_id: string; teacher_id: string }>();
+
+    const teacherStmts = (teacherLinks.results ?? []).map((link) =>
+      db.prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
+        .bind(crypto.randomUUID(), link.teacher_id, link.class_id)
+    );
+    await batchRun(teacherStmts);
+
+    ctx.set("classCount", classMap.size);
+    ctx.set("enrollCount", enrollStmts.length);
+    ctx.set("teacherAssignments", teacherStmts.length);
+
+    return { step: "finalize" };
+  },
+
+  // Step 4: write final result to sync_logs
+  async finalize(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
+    const logId = (await ctx.get("logId")) as string;
+    const startTime = (await ctx.get("startTime")) as number;
+    const studentCount = (await ctx.get("studentCount")) as number;
+    const teacherCount = (await ctx.get("teacherCount")) as number;
+    const classCount = (await ctx.get("classCount")) as number;
+    const enrollCount = (await ctx.get("enrollCount")) as number;
+    const teacherAssignments = (await ctx.get("teacherAssignments")) as number;
+
+    await db
+      .prepare(
+        `UPDATE sync_logs SET status='ok', students=?1, teachers=?2, classes=?3,
+         enrollments=?4, teacher_assignments=?5, duration_ms=?6 WHERE id=?7`
+      )
+      .bind(studentCount, teacherCount, classCount, enrollCount, teacherAssignments, Date.now() - startTime, logId)
+      .run();
+
+    return { done: true, result: { ok: true } };
+  },
+}, { maxAttempts: 2 });
+
+export async function startSyncWorkflow(logId: string): Promise<void> {
+  await workflow.start("veracross-sync", { logId });
 }
