@@ -372,7 +372,7 @@ app.get("/api/teacher/all-classes", async (c) => {
        FROM classes c
        LEFT JOIN teacher_classes tc ON tc.class_id = c.id AND tc.teacher_id = ?1
        LEFT JOIN enrollments e ON e.class_id = c.id
-       GROUP BY c.id ORDER BY c.name LIMIT 500`
+       GROUP BY c.id ORDER BY c.name LIMIT 5000`
     )
     .bind(user.id)
     .all();
@@ -756,7 +756,7 @@ app.get("/api/admin/classes", async (c) => {
        FROM classes c
        LEFT JOIN enrollments e ON e.class_id = c.id
        LEFT JOIN teacher_classes tc ON tc.class_id = c.id
-       GROUP BY c.id ORDER BY c.name LIMIT 500`
+       GROUP BY c.id ORDER BY c.name LIMIT 5000`
     )
     .all();
 
