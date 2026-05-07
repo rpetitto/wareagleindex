@@ -605,6 +605,44 @@ app.get("/api/admin/overview", async (c) => {
   });
 });
 
+app.get("/api/admin/overview/concerns", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const rows = await db
+    .prepare(
+      `SELECT
+         er.survey_window_id,
+         sw.name               AS window_name,
+         sw.opens_at,
+         er.class_id,
+         COALESCE(MAX(er.class_name), c.name) AS class_name,
+         COALESCE(c.primary_teacher_name, MAX(er.teacher_name)) AS teacher_name,
+         COUNT(*)              AS total,
+         SUM(CASE WHEN er.challenge > 5 AND er.love <= 5 THEN 1 ELSE 0 END) AS anxiety_cnt,
+         SUM(CASE WHEN er.challenge <= 5 AND er.love <= 5 THEN 1 ELSE 0 END) AS boredom_cnt,
+         ROUND(AVG(er.challenge), 1) AS avg_c,
+         ROUND(AVG(er.love), 1)      AS avg_l
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       LEFT JOIN classes c ON c.id = er.class_id
+       WHERE datetime(sw.opens_at) >= datetime('now', '-90 days')
+       GROUP BY er.survey_window_id, er.class_id
+       HAVING total >= 3
+          AND (anxiety_cnt + boredom_cnt) * 1.0 / total >= 0.5
+       ORDER BY (anxiety_cnt + boredom_cnt) * 1.0 / total DESC, sw.opens_at DESC
+       LIMIT 30`
+    )
+    .all<{
+      survey_window_id: string; window_name: string; opens_at: string;
+      class_id: string; class_name: string | null; teacher_name: string | null;
+      total: number; anxiety_cnt: number; boredom_cnt: number;
+      avg_c: number | null; avg_l: number | null;
+    }>();
+
+  return c.json(rows.results);
+});
+
 app.get("/api/admin/surveys", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);

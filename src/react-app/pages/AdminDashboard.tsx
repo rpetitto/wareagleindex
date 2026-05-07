@@ -27,12 +27,71 @@ const TYPE_LABEL: Record<string, string> = {
   dimensions: "Dimensions",
 };
 
+interface Concern {
+  survey_window_id: string;
+  window_name: string;
+  opens_at: string;
+  class_id: string;
+  class_name: string | null;
+  teacher_name: string | null;
+  total: number;
+  anxiety_cnt: number;
+  boredom_cnt: number;
+  avg_c: number | null;
+  avg_l: number | null;
+}
+
+function ConcernCard({ c, onClick }: { c: Concern; onClick: () => void }) {
+  const concerning = c.anxiety_cnt + c.boredom_cnt;
+  const pct = Math.round((concerning / c.total) * 100);
+  const dominantlyAnxious = c.anxiety_cnt >= c.boredom_cnt;
+  const borderColor = dominantlyAnxious ? "border-orange-400" : "border-gray-400";
+  const badgeColor = dominantlyAnxious ? "bg-orange-100 text-orange-700" : "bg-gray-100 text-gray-600";
+  const label = c.anxiety_cnt > 0 && c.boredom_cnt > 0
+    ? `${c.anxiety_cnt} anxious · ${c.boredom_cnt} bored`
+    : c.anxiety_cnt > 0 ? `${c.anxiety_cnt} anxious` : `${c.boredom_cnt} bored`;
+
+  return (
+    <button
+      onClick={onClick}
+      className={`shrink-0 w-56 bg-white rounded-2xl border-2 ${borderColor} shadow-sm p-4 text-left hover:shadow-md transition-all cursor-pointer`}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <p className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2">{c.class_name ?? "Unknown class"}</p>
+        <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${badgeColor}`}>{pct}%</span>
+      </div>
+      {c.teacher_name && <p className="text-xs text-gray-400 truncate mb-2">{c.teacher_name}</p>}
+      <p className="text-xs text-gray-500 truncate mb-3">{c.window_name}</p>
+      <div className="space-y-1">
+        {c.anxiety_cnt > 0 && (
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-orange-400 shrink-0" />
+            <span className="text-xs text-gray-600">{c.anxiety_cnt} Anxiety</span>
+          </div>
+        )}
+        {c.boredom_cnt > 0 && (
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-gray-400 shrink-0" />
+            <span className="text-xs text-gray-600">{c.boredom_cnt} Boredom</span>
+          </div>
+        )}
+      </div>
+      <div className="mt-3 pt-3 border-t border-gray-50 flex gap-3 text-xs text-gray-400">
+        <span>Challenge: <strong className="text-gray-700">{c.avg_c ?? "—"}</strong></span>
+        <span>Love: <strong className="text-gray-700">{c.avg_l ?? "—"}</strong></span>
+      </div>
+    </button>
+  );
+}
+
 function OverviewPage() {
   const [data, setData] = useState<Overview | null>(null);
+  const [concerns, setConcerns] = useState<Concern[]>([]);
   const [selectedWindowId, setSelectedWindowId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/overview").then((r) => r.json()).then((d) => setData(d as Overview));
+    fetch("/api/admin/overview/concerns").then((r) => r.json()).then((d) => setConcerns(d as Concern[]));
   }, []);
 
   if (!data) return <div className="text-center text-gray-400 py-12">Loading…</div>;
@@ -56,6 +115,27 @@ function OverviewPage() {
           </Link>
         ))}
       </div>
+
+      {concerns.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center gap-2 mb-3">
+            <svg className="w-4 h-4 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <h3 className="font-semibold text-gray-800">Needs Attention</h3>
+            <span className="text-xs text-gray-400">classes where ≥50% of responses are anxiety or boredom · last 90 days</span>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2" style={{ scrollbarWidth: "thin" }}>
+            {concerns.map((c) => (
+              <ConcernCard
+                key={`${c.survey_window_id}-${c.class_id}`}
+                c={c}
+                onClick={() => setSelectedWindowId(c.survey_window_id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <h3 className="font-semibold text-gray-800 mb-4">Active Survey Windows</h3>
