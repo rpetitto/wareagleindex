@@ -491,3 +491,46 @@ workflow("veracross-sync", {
 export async function startSyncWorkflow(logId: string, phases: SyncPhase[]): Promise<void> {
   await workflow.start("veracross-sync", { logId, phases });
 }
+
+// Diagnostic helper: hits a Veracross endpoint with current credentials and
+// returns status + first record. Used by /api/admin/debug/vc.
+export async function debugVeracrossEndpoint(path: string): Promise<{
+  ok: boolean;
+  status: number;
+  schoolYear: number;
+  count?: number;
+  sample?: unknown;
+  error?: string;
+}> {
+  const schoolYear = currentSchoolYear();
+  try {
+    const token = await getVCToken();
+    const base = getBase();
+    const res = await fetch(`${base}/${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Page-Size": "5",
+        "X-Page-Number": "1",
+      },
+    });
+    const bodyText = await res.text();
+    let parsed: { data?: unknown[]; error?: string } | null = null;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      return { ok: false, status: res.status, schoolYear, error: bodyText.slice(0, 500) };
+    }
+    if (!res.ok) {
+      return { ok: false, status: res.status, schoolYear, error: parsed?.error ?? bodyText.slice(0, 500) };
+    }
+    return {
+      ok: true,
+      status: res.status,
+      schoolYear,
+      count: parsed?.data?.length ?? 0,
+      sample: parsed?.data?.[0] ?? null,
+    };
+  } catch (err) {
+    return { ok: false, status: 0, schoolYear, error: String(err) };
+  }
+}

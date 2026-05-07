@@ -9,7 +9,7 @@ import {
   exchangeGoogleCode,
   getAdminEmails,
 } from "./auth";
-import { startSyncWorkflow, type SyncPhase } from "./veracross";
+import { startSyncWorkflow, debugVeracrossEndpoint, type SyncPhase } from "./veracross";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -732,6 +732,15 @@ app.get("/api/admin/classes", async (c) => {
     .all();
 
   return c.json(rows.results);
+});
+
+app.get("/api/admin/debug/vc", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  const path = c.req.query("path");
+  if (!path) return c.json({ error: "Missing ?path= query param" }, 400);
+  const result = await debugVeracrossEndpoint(path);
+  return c.json(result);
 });
 
 app.post("/api/admin/sync", async (c) => {
