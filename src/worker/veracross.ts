@@ -151,13 +151,13 @@ function getBase() {
   return `https://api.veracross.com/${school}/v3`;
 }
 
-// Veracross "school_year" is the year the school year ENDS in.
-// School years typically start in late summer (Aug) and end in late spring (May/June).
-// Using July as the rollover month is the standard convention.
+// Veracross "school_year" is the year the school year STARTS in.
+// e.g. the 2025-2026 academic year = school_year 2025.
+// School years start in August (month 7), so Jan-Jul are still the previous start-year.
 function currentSchoolYear(): number {
   const now = new Date();
   const year = now.getUTCFullYear();
-  return now.getUTCMonth() >= 6 ? year + 1 : year;
+  return now.getUTCMonth() >= 7 ? year : year - 1;
 }
 
 async function loadPhotoMap(base: string, token: string): Promise<Map<number, string>> {

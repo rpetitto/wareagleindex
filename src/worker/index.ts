@@ -569,7 +569,14 @@ app.delete("/api/admin/surveys/:id", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
-  await db.prepare(`DELETE FROM survey_windows WHERE id = ?1`).bind(c.req.param("id")).run();
+  const id = c.req.param("id");
+  // Delete responses first (FK constraints prevent deleting the window otherwise)
+  await db.batch([
+    db.prepare(`DELETE FROM engagement_responses WHERE survey_window_id = ?1`).bind(id),
+    db.prepare(`DELETE FROM mattering_responses WHERE survey_window_id = ?1`).bind(id),
+    db.prepare(`DELETE FROM dimension_responses WHERE survey_window_id = ?1`).bind(id),
+    db.prepare(`DELETE FROM survey_windows WHERE id = ?1`).bind(id),
+  ]);
   return c.json({ ok: true });
 });
 
