@@ -312,13 +312,16 @@ workflow("veracross-sync", {
     let scheduledClassIds: Set<number> | null = null;
     const classDateRange = new Map<number, { begin_date: string; end_date: string }>();
     try {
+      // school_year filter returns 0 rows on this endpoint, so fetch unfiltered
+      // and rely on grading_period.school_year inline on each schedule record
+      // for date-range mapping.
       const schedules = await vcGet<VCClassSchedule>(
         base,
-        `academics/class_schedules?school_year=${schoolYear}`,
+        `academics/class_schedules`,
         token,
-        10
+        20
       );
-      console.log(`class_schedules: ${schedules.length} rows for school_year=${schoolYear}`);
+      console.log(`class_schedules: ${schedules.length} rows`);
       if (schedules.length > 0) {
         scheduledClassIds = new Set<number>();
         for (const s of schedules) {
