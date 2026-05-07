@@ -763,6 +763,410 @@ app.get("/api/admin/classes", async (c) => {
   return c.json(rows.results);
 });
 
+// ─── Teacher Class Aggregates ─────────────────────────────────────────────────
+
+app.get("/api/teacher/classes/:classId/aggregates", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+  if (user.role !== "teacher" && user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { classId } = c.req.param();
+
+  // Verify teacher link (admins bypass)
+  if (user.role !== "admin") {
+    const owns = await db
+      .prepare(`SELECT 1 FROM teacher_classes WHERE teacher_id = ?1 AND class_id = ?2`)
+      .bind(user.id, classId)
+      .first();
+    if (!owns) return c.json({ error: "Forbidden" }, 403);
+  }
+
+  const cls = await db
+    .prepare(`SELECT id, name, veracross_id, grade_level, primary_teacher_name, begin_date, end_date FROM classes WHERE id = ?1`)
+    .bind(classId)
+    .first<{ id: string; name: string; veracross_id: string | null; grade_level: string | null; primary_teacher_name: string | null; begin_date: string | null; end_date: string | null }>();
+  if (!cls) return c.json({ error: "Not found" }, 404);
+
+  const studentCountRow = await db
+    .prepare(`SELECT COUNT(*) as cnt FROM enrollments WHERE class_id = ?1`)
+    .bind(classId)
+    .first<{ cnt: number }>();
+
+  // Latest window that has any EI or MI response for this class
+  const latestWindow = await db
+    .prepare(
+      `SELECT sw.id, sw.name, sw.opens_at FROM survey_windows sw
+       WHERE sw.id IN (
+         SELECT DISTINCT survey_window_id FROM engagement_responses WHERE class_id = ?1
+         UNION SELECT DISTINCT survey_window_id FROM mattering_responses WHERE class_id = ?1
+       ) ORDER BY sw.opens_at DESC LIMIT 1`
+    )
+    .bind(classId)
+    .first<{ id: string; name: string; opens_at: string }>();
+
+  let latest_window = null;
+  if (latestWindow) {
+    const eiAgg = await db
+      .prepare(`SELECT AVG(challenge) as avg_c, AVG(love) as avg_l, COUNT(*) as cnt FROM engagement_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+    const miAgg = await db
+      .prepare(`SELECT AVG(connection) as avg_c, AVG(contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+    latest_window = {
+      window: latestWindow,
+      ei: eiAgg,
+      mi: miAgg,
+    };
+  }
+
+  // School year aggregate
+  const schoolYearStart = cls.begin_date ?? `datetime('now', '-1 year')`;
+  const syStartParam = cls.begin_date ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const syEiWinCount = await db
+    .prepare(`SELECT COUNT(DISTINCT er.survey_window_id) as cnt FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ cnt: number }>();
+  const syMiWinCount = await db
+    .prepare(`SELECT COUNT(DISTINCT mr.survey_window_id) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ cnt: number }>();
+  const syEi = await db
+    .prepare(`SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const syMi = await db
+    .prepare(`SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+
+  // Lifetime course aggregate (this teacher, same course name across all their sections)
+  const teacherId = user.role === "admin" ? null : user.id;
+  let lifetimeEi, lifetimeMi;
+  if (teacherId) {
+    lifetimeEi = await db
+      .prepare(
+        `SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT er.survey_window_id) as win_cnt
+         FROM engagement_responses er
+         JOIN classes c ON c.id = er.class_id
+         JOIN teacher_classes tc ON tc.class_id = c.id
+         WHERE c.name = ?1 AND tc.teacher_id = ?2`
+      )
+      .bind(cls.name, teacherId)
+      .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+    lifetimeMi = await db
+      .prepare(
+        `SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT mr.survey_window_id) as win_cnt
+         FROM mattering_responses mr
+         JOIN classes c ON c.id = mr.class_id
+         JOIN teacher_classes tc ON tc.class_id = c.id
+         WHERE c.name = ?1 AND tc.teacher_id = ?2`
+      )
+      .bind(cls.name, teacherId)
+      .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+  } else {
+    lifetimeEi = await db
+      .prepare(
+        `SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT er.survey_window_id) as win_cnt
+         FROM engagement_responses er
+         JOIN classes c ON c.id = er.class_id
+         WHERE c.name = ?1`
+      )
+      .bind(cls.name)
+      .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+    lifetimeMi = await db
+      .prepare(
+        `SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT mr.survey_window_id) as win_cnt
+         FROM mattering_responses mr
+         JOIN classes c ON c.id = mr.class_id
+         WHERE c.name = ?1`
+      )
+      .bind(cls.name)
+      .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+  }
+
+  const lifetimeClassCount = await db
+    .prepare(`SELECT COUNT(DISTINCT id) as cnt FROM classes WHERE name = ?1`)
+    .bind(cls.name)
+    .first<{ cnt: number }>();
+
+  return c.json({
+    cls: { ...cls, studentCount: studentCountRow?.cnt ?? 0 },
+    latest_window,
+    school_year: {
+      ei: syEi,
+      mi: syMi,
+      window_count: Math.max(syEiWinCount?.cnt ?? 0, syMiWinCount?.cnt ?? 0),
+    },
+    lifetime_course: {
+      ei: lifetimeEi,
+      mi: lifetimeMi,
+      class_count: lifetimeClassCount?.cnt ?? 0,
+    },
+  });
+});
+
+// ─── Admin Class Aggregates ───────────────────────────────────────────────────
+
+app.get("/api/admin/classes/:classId/aggregates", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { classId } = c.req.param();
+
+  const cls = await db
+    .prepare(`SELECT id, name, veracross_id, grade_level, primary_teacher_name, begin_date, end_date FROM classes WHERE id = ?1`)
+    .bind(classId)
+    .first<{ id: string; name: string; veracross_id: string | null; grade_level: string | null; primary_teacher_name: string | null; begin_date: string | null; end_date: string | null }>();
+  if (!cls) return c.json({ error: "Not found" }, 404);
+
+  const studentCountRow = await db
+    .prepare(`SELECT COUNT(*) as cnt FROM enrollments WHERE class_id = ?1`)
+    .bind(classId)
+    .first<{ cnt: number }>();
+
+  const latestWindow = await db
+    .prepare(
+      `SELECT sw.id, sw.name, sw.opens_at FROM survey_windows sw
+       WHERE sw.id IN (
+         SELECT DISTINCT survey_window_id FROM engagement_responses WHERE class_id = ?1
+         UNION SELECT DISTINCT survey_window_id FROM mattering_responses WHERE class_id = ?1
+       ) ORDER BY sw.opens_at DESC LIMIT 1`
+    )
+    .bind(classId)
+    .first<{ id: string; name: string; opens_at: string }>();
+
+  let latest_window = null;
+  if (latestWindow) {
+    const eiAgg = await db
+      .prepare(`SELECT AVG(challenge) as avg_c, AVG(love) as avg_l, COUNT(*) as cnt FROM engagement_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+    const miAgg = await db
+      .prepare(`SELECT AVG(connection) as avg_c, AVG(contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses WHERE class_id = ?1 AND survey_window_id = ?2`)
+      .bind(classId, latestWindow.id)
+      .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+    latest_window = { window: latestWindow, ei: eiAgg, mi: miAgg };
+  }
+
+  const syStartParam = cls.begin_date ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const syEiWinCount = await db
+    .prepare(`SELECT COUNT(DISTINCT er.survey_window_id) as cnt FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ cnt: number }>();
+  const syMiWinCount = await db
+    .prepare(`SELECT COUNT(DISTINCT mr.survey_window_id) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ cnt: number }>();
+  const syEi = await db
+    .prepare(`SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt FROM engagement_responses er JOIN survey_windows sw ON sw.id = er.survey_window_id WHERE er.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+  const syMi = await db
+    .prepare(`SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as cnt FROM mattering_responses mr JOIN survey_windows sw ON sw.id = mr.survey_window_id WHERE mr.class_id = ?1 AND datetime(sw.opens_at) >= ?2`)
+    .bind(classId, syStartParam)
+    .first<{ avg_c: number | null; avg_l: number | null; cnt: number }>();
+
+  // Lifetime across ALL teachers for same course name
+  const lifetimeEi = await db
+    .prepare(
+      `SELECT AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT er.survey_window_id) as win_cnt
+       FROM engagement_responses er
+       JOIN classes c ON c.id = er.class_id
+       WHERE c.name = ?1`
+    )
+    .bind(cls.name)
+    .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+  const lifetimeMi = await db
+    .prepare(
+      `SELECT AVG(mr.connection) as avg_c, AVG(mr.contribution) as avg_l, COUNT(*) as ei_cnt, COUNT(DISTINCT mr.survey_window_id) as win_cnt
+       FROM mattering_responses mr
+       JOIN classes c ON c.id = mr.class_id
+       WHERE c.name = ?1`
+    )
+    .bind(cls.name)
+    .first<{ avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number }>();
+
+  const lifetimeClassCount = await db
+    .prepare(`SELECT COUNT(DISTINCT id) as cnt FROM classes WHERE name = ?1`)
+    .bind(cls.name)
+    .first<{ cnt: number }>();
+
+  const totalStudentCount = await db
+    .prepare(`SELECT COUNT(DISTINCT e.student_id) as cnt FROM enrollments e JOIN classes c ON c.id = e.class_id WHERE c.name = ?1`)
+    .bind(cls.name)
+    .first<{ cnt: number }>();
+
+  return c.json({
+    cls: { ...cls, studentCount: studentCountRow?.cnt ?? 0 },
+    latest_window,
+    school_year: {
+      ei: syEi,
+      mi: syMi,
+      window_count: Math.max(syEiWinCount?.cnt ?? 0, syMiWinCount?.cnt ?? 0),
+    },
+    lifetime_course: {
+      ei: lifetimeEi,
+      mi: lifetimeMi,
+      class_count: lifetimeClassCount?.cnt ?? 0,
+      total_student_count: totalStudentCount?.cnt ?? 0,
+    },
+  });
+});
+
+// ─── Student History ──────────────────────────────────────────────────────────
+
+app.get("/api/student/history", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const [eiRows, miRows, dimRows] = await Promise.all([
+    db.prepare(
+      `SELECT er.class_id, er.challenge, er.love, er.submitted_at, er.class_name, er.teacher_name,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.type
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       WHERE er.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(user.id).all<{
+      class_id: string; challenge: number; love: number; submitted_at: string;
+      class_name: string | null; teacher_name: string | null;
+      window_id: string; window_name: string; opens_at: string; type: string;
+    }>(),
+    db.prepare(
+      `SELECT mr.class_id, mr.connection, mr.contribution, mr.submitted_at, mr.class_name, mr.teacher_name,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.type
+       FROM mattering_responses mr
+       JOIN survey_windows sw ON sw.id = mr.survey_window_id
+       WHERE mr.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(user.id).all<{
+      class_id: string; connection: number; contribution: number; submitted_at: string;
+      class_name: string | null; teacher_name: string | null;
+      window_id: string; window_name: string; opens_at: string; type: string;
+    }>(),
+    db.prepare(
+      `SELECT dr.class_id, dr.submitted_at, dr.class_name, dr.teacher_name,
+              dr.behavioral_effort, dr.behavioral_focus, dr.behavioral_respect,
+              dr.cognitive_clarity, dr.cognitive_expectations, dr.cognitive_feedback, dr.cognitive_challenge,
+              dr.emotional_known, dr.emotional_cared, dr.emotional_motivated, dr.emotional_enjoyment,
+              dr.instructional_activities, dr.instructional_collaboration, dr.instructional_assignments,
+              sw.id as window_id, sw.name as window_name, sw.opens_at, sw.type
+       FROM dimension_responses dr
+       JOIN survey_windows sw ON sw.id = dr.survey_window_id
+       WHERE dr.student_id = ?1 ORDER BY sw.opens_at DESC`
+    ).bind(user.id).all<Record<string, unknown>>(),
+  ]);
+
+  // Get class fallback info for null snapshots
+  const allClassIds = new Set<string>();
+  for (const r of eiRows.results) allClassIds.add(r.class_id);
+  for (const r of miRows.results) allClassIds.add(r.class_id);
+  for (const r of (dimRows.results as Record<string, unknown>[])) allClassIds.add(r.class_id as string);
+
+  const classInfoMap = new Map<string, { name: string; primary_teacher_name: string | null; subject: string | null }>();
+  for (const classId of allClassIds) {
+    const info = await db
+      .prepare(`SELECT name, primary_teacher_name, subject FROM classes WHERE id = ?1`)
+      .bind(classId)
+      .first<{ name: string; primary_teacher_name: string | null; subject: string | null }>();
+    if (info) classInfoMap.set(classId, info);
+  }
+
+  // Group by class_id
+  type HistoryEntry = Record<string, unknown> & { type: string; opens_at: string };
+  const byClass = new Map<string, { class_id: string; class_name: string; teacher_name: string | null; subject: string | null; responses: HistoryEntry[]; latest_at: string }>();
+
+  function getOrCreate(classId: string, classNameSnap: string | null, teacherNameSnap: string | null) {
+    if (!byClass.has(classId)) {
+      const fallback = classInfoMap.get(classId);
+      byClass.set(classId, {
+        class_id: classId,
+        class_name: classNameSnap ?? fallback?.name ?? classId,
+        teacher_name: teacherNameSnap ?? fallback?.primary_teacher_name ?? null,
+        subject: fallback?.subject ?? null,
+        responses: [],
+        latest_at: "",
+      });
+    }
+    return byClass.get(classId)!;
+  }
+
+  for (const r of eiRows.results) {
+    const entry = getOrCreate(r.class_id, r.class_name, r.teacher_name);
+    entry.responses.push({ ...r, type: "engagement_index" } as HistoryEntry);
+    if (!entry.latest_at || r.opens_at > entry.latest_at) entry.latest_at = r.opens_at;
+  }
+  for (const r of miRows.results) {
+    const entry = getOrCreate(r.class_id, r.class_name, r.teacher_name);
+    entry.responses.push({ ...r, type: "mattering_index" } as HistoryEntry);
+    if (!entry.latest_at || r.opens_at > entry.latest_at) entry.latest_at = r.opens_at;
+  }
+  for (const r of (dimRows.results as (Record<string, unknown> & { class_id: string; class_name: string | null; teacher_name: string | null; opens_at: string })[]) ) {
+    const entry = getOrCreate(r.class_id, r.class_name, r.teacher_name);
+    entry.responses.push({ ...r, type: "dimensions" } as HistoryEntry);
+    if (!entry.latest_at || r.opens_at > entry.latest_at) entry.latest_at = r.opens_at;
+  }
+
+  // Sort responses within each class
+  for (const entry of byClass.values()) {
+    entry.responses.sort((a, b) => String(b.opens_at ?? "").localeCompare(String(a.opens_at ?? "")));
+  }
+
+  const result = Array.from(byClass.values()).sort((a, b) => b.latest_at.localeCompare(a.latest_at));
+  return c.json(result);
+});
+
+// ─── Student Response View ────────────────────────────────────────────────────
+
+app.get("/api/student/responses/:windowId/:classId", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user) return c.json({ error: "Unauthorized" }, 401);
+
+  const { windowId, classId } = c.req.param();
+
+  const win = await db
+    .prepare(`SELECT id, name, type, opens_at, closes_at FROM survey_windows WHERE id = ?1`)
+    .bind(windowId)
+    .first<{ id: string; name: string; type: string; opens_at: string; closes_at: string }>();
+  if (!win) return c.json({ error: "Not found" }, 404);
+
+  const cls = await db
+    .prepare(`SELECT id, name, subject, grade_level FROM classes WHERE id = ?1`)
+    .bind(classId)
+    .first<{ id: string; name: string; subject: string | null; grade_level: string | null }>();
+
+  // Try EI
+  const eiResp = await db
+    .prepare(`SELECT challenge, love, submitted_at, class_name, teacher_name FROM engagement_responses WHERE student_id = ?1 AND class_id = ?2 AND survey_window_id = ?3`)
+    .bind(user.id, classId, windowId)
+    .first<{ challenge: number; love: number; submitted_at: string; class_name: string | null; teacher_name: string | null }>();
+  if (eiResp) return c.json({ type: "engagement_index", window: win, class: cls, response: eiResp });
+
+  // Try MI
+  const miResp = await db
+    .prepare(`SELECT connection, contribution, submitted_at, class_name, teacher_name FROM mattering_responses WHERE student_id = ?1 AND class_id = ?2 AND survey_window_id = ?3`)
+    .bind(user.id, classId, windowId)
+    .first<{ connection: number; contribution: number; submitted_at: string; class_name: string | null; teacher_name: string | null }>();
+  if (miResp) return c.json({ type: "mattering_index", window: win, class: cls, response: miResp });
+
+  // Try dimensions
+  const dimResp = await db
+    .prepare(
+      `SELECT behavioral_effort, behavioral_focus, behavioral_respect,
+              cognitive_clarity, cognitive_expectations, cognitive_feedback, cognitive_challenge,
+              emotional_known, emotional_cared, emotional_motivated, emotional_enjoyment,
+              instructional_activities, instructional_collaboration, instructional_assignments,
+              behavioral_comments, cognitive_comments, emotional_comments, instructional_comments,
+              submitted_at, class_name, teacher_name
+       FROM dimension_responses WHERE student_id = ?1 AND class_id = ?2 AND survey_window_id = ?3`
+    )
+    .bind(user.id, classId, windowId)
+    .first();
+  if (dimResp) return c.json({ type: "dimensions", window: win, class: cls, response: dimResp });
+
+  return c.json({ error: "No response found" }, 404);
+});
+
 app.get("/api/admin/debug/vc", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);

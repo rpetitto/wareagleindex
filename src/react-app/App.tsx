@@ -5,8 +5,11 @@ import StudentDashboard from "./pages/StudentDashboard";
 import SurveyTaker from "./pages/SurveyTaker";
 import EngagementSurvey from "./pages/EngagementSurvey";
 import TeacherDashboard from "./pages/TeacherDashboard";
+import TeacherClassDetail from "./pages/TeacherClassDetail";
 import ClassResults from "./pages/ClassResults";
 import AdminDashboard from "./pages/AdminDashboard";
+import StudentHistory from "./pages/StudentHistory";
+import StudentResponseView from "./pages/StudentResponseView";
 
 export interface User {
   id: string;
@@ -93,6 +96,16 @@ export default function App() {
           }
         />
         <Route
+          path="/teacher/class/:classId"
+          element={
+            user && (user.role === "teacher" || user.role === "admin") ? (
+              <TeacherClassDetail />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+        <Route
           path="/teacher/class/:classId/window/:windowId"
           element={
             user && (user.role === "teacher" || user.role === "admin") ? (
@@ -101,6 +114,14 @@ export default function App() {
               <Navigate to="/login" replace />
             )
           }
+        />
+        <Route
+          path="/student/history"
+          element={user ? <StudentHistory /> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/student/survey/:windowId/:classId/view"
+          element={user ? <StudentResponseView /> : <Navigate to="/login" replace />}
         />
         <Route
           path="/admin/*"

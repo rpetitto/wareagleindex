@@ -80,7 +80,7 @@ export default function StudentDashboard() {
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-2 gap-4 mb-8">
+        <div className="grid grid-cols-3 gap-4 mb-8">
           <div className="bg-white rounded-xl border border-gray-100 p-4 text-center">
             <div className="text-3xl font-bold text-crimson">{totalPending}</div>
             <div className="text-sm text-gray-500 mt-1">Pending</div>
@@ -88,6 +88,15 @@ export default function StudentDashboard() {
           <div className="bg-white rounded-xl border border-gray-100 p-4 text-center">
             <div className="text-3xl font-bold text-green-600">{totalCompleted}</div>
             <div className="text-sm text-gray-500 mt-1">Completed</div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 p-4 text-center flex flex-col items-center justify-center">
+            <Link
+              to="/student/history"
+              className="text-sm font-medium text-crimson hover:text-crimson-dark transition-colors"
+            >
+              View History
+            </Link>
+            <div className="text-xs text-gray-400 mt-0.5">All responses</div>
           </div>
         </div>
 
@@ -152,11 +161,21 @@ export default function StudentDashboard() {
                       </svg>
                     </Link>
                   ) : (
-                    <div className="flex items-center gap-1.5 text-green-600 text-sm font-medium">
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                      All done
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 text-green-600 text-sm font-medium">
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        All done
+                      </div>
+                      {done.length > 0 && done[0] && (
+                        <Link
+                          to={`/student/survey/${group.window.id}/${done[0].id}/view`}
+                          className="text-xs text-crimson font-medium hover:text-crimson-dark transition-colors"
+                        >
+                          View
+                        </Link>
+                      )}
                     </div>
                   )}
                 </div>
@@ -186,7 +205,11 @@ export default function StudentDashboard() {
                     </Link>
                   ))}
                   {done.map((cls) => (
-                    <div key={cls.id} className="flex items-center justify-between px-6 py-3 bg-gray-50/50">
+                    <Link
+                      key={cls.id}
+                      to={`/student/survey/${group.window.id}/${cls.id}/view`}
+                      className="flex items-center justify-between px-6 py-3 bg-gray-50/50 hover:bg-gray-100/50 transition-colors"
+                    >
                       <div>
                         <div className="font-medium text-gray-400">{cls.name}</div>
                         {cls.subject && <div className="text-sm text-gray-300">{cls.subject}</div>}
@@ -197,7 +220,7 @@ export default function StudentDashboard() {
                         </svg>
                         <span className="text-sm font-medium">Submitted</span>
                       </div>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}

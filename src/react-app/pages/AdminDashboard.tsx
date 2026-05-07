@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Routes, Route, Link, useLocation, useNavigate, useParams, Navigate } from "react-router-dom";
 import NavBar from "../components/NavBar";
 
@@ -34,10 +34,10 @@ function OverviewPage() {
   if (!data) return <div className="text-center text-gray-400 py-12">Loading…</div>;
 
   const stats = [
-    { label: "Students", value: data.students, color: "text-crimson" },
-    { label: "Teachers", value: data.teachers, color: "text-blue-600" },
-    { label: "Classes", value: data.classes, color: "text-purple-600" },
-    { label: "Total Responses", value: data.totalResponses, color: "text-green-600" },
+    { label: "Students", value: data.students, color: "text-crimson", to: "/admin/users?role=student" },
+    { label: "Teachers", value: data.teachers, color: "text-blue-600", to: "/admin/users?role=teacher" },
+    { label: "Classes", value: data.classes, color: "text-purple-600", to: "/admin/classes" },
+    { label: "Total Responses", value: data.totalResponses, color: "text-green-600", to: "/admin/surveys" },
   ];
 
   return (
@@ -46,10 +46,10 @@ function OverviewPage() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {stats.map((s) => (
-          <div key={s.label} className="bg-white rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+          <Link key={s.label} to={s.to} className="bg-white rounded-xl border border-gray-100 p-4 text-center shadow-sm hover:border-gray-200 hover:shadow-md transition-all block">
             <div className={`text-3xl font-bold ${s.color}`}>{s.value.toLocaleString()}</div>
             <div className="text-sm text-gray-500 mt-1">{s.label}</div>
-          </div>
+          </Link>
         ))}
       </div>
 
@@ -867,7 +867,9 @@ function UserProfilePage() {
               {teaches.map((cls) => (
                 <div key={cls.id} className="px-5 py-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-900 text-sm truncate">{cls.name}</p>
+                    <Link to={`/admin/classes/${cls.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+                      {cls.name}
+                    </Link>
                     {cls.grade_level && (
                       <p className="text-xs text-gray-400">Grade {cls.grade_level}</p>
                     )}
@@ -932,6 +934,267 @@ function UserProfilePage() {
   );
 }
 
+// ─── Admin Classes ────────────────────────────────────────────────────────────
+
+interface AdminClass {
+  id: string;
+  name: string;
+  subject: string | null;
+  grade_level: string | null;
+  school_year: string | null;
+  term: string | null;
+  veracross_id: string | null;
+  begin_date: string | null;
+  end_date: string | null;
+  student_count: number;
+  teacher_count: number;
+}
+
+function AdminClassesPage() {
+  const [classes, setClasses] = useState<AdminClass[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/admin/classes")
+      .then((r) => r.json())
+      .then((d) => { setClasses(d as AdminClass[]); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const filtered = classes.filter((c) =>
+    !search || c.name.toLowerCase().includes(search.toLowerCase()) ||
+    (c.veracross_id ?? "").includes(search)
+  );
+
+  return (
+    <div>
+      <h2 className="text-xl font-bold text-gray-900 mb-4">Classes</h2>
+      <div className="flex gap-3 mb-4">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or Veracross ID…"
+          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crimson/30"
+        />
+      </div>
+      {loading && <div className="text-center text-gray-400 py-12">Loading…</div>}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        {!loading && filtered.length === 0 && (
+          <div className="p-8 text-center text-gray-400 text-sm">No classes found.</div>
+        )}
+        {filtered.map((cls, i) => (
+          <div
+            key={cls.id}
+            className={`flex items-center gap-3 px-4 py-3 ${i < filtered.length - 1 ? "border-b border-gray-50" : ""}`}
+          >
+            <div className="flex-1 min-w-0">
+              <Link to={`/admin/classes/${cls.id}`} className="font-medium text-gray-900 text-sm truncate hover:text-crimson transition-colors block">
+                {cls.name}
+              </Link>
+              <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
+                {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+              </div>
+            </div>
+            <div className="text-xs text-gray-500 shrink-0 flex items-center gap-3">
+              <span>{cls.student_count} students</span>
+              <span>{cls.teacher_count} teachers</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface AggregateData {
+  cls: {
+    id: string; name: string; veracross_id: string | null; grade_level: string | null;
+    primary_teacher_name: string | null; begin_date: string | null; end_date: string | null;
+    studentCount: number;
+  };
+  latest_window: {
+    window: { id: string; name: string; opens_at: string };
+    ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
+    mi: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
+  } | null;
+  school_year: {
+    ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
+    mi: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
+    window_count: number;
+  };
+  lifetime_course: {
+    ei: { avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number } | null;
+    mi: { avg_c: number | null; avg_l: number | null; ei_cnt: number; win_cnt: number } | null;
+    class_count: number;
+    total_student_count?: number;
+  };
+}
+
+function MetricBar({ value, max, color }: { value: number | null; max: number; color: string }) {
+  const pct = value != null ? Math.round((value / max) * 100) : 0;
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-xs font-semibold text-gray-700 w-8 text-right">
+        {value != null ? value.toFixed(1) : "—"}
+      </span>
+    </div>
+  );
+}
+
+function AggSection({
+  title,
+  subtitle,
+  ei,
+  mi,
+  windowCount,
+  responseCount,
+  windowLinks,
+}: {
+  title: string;
+  subtitle?: string;
+  ei: { avg_c: number | null; avg_l: number | null } | null | undefined;
+  mi: { avg_c: number | null; avg_l: number | null } | null | undefined;
+  windowCount?: number;
+  responseCount?: number;
+  windowLinks?: React.ReactNode;
+}) {
+  const hasEi = ei && (ei.avg_c != null || ei.avg_l != null);
+  const hasMi = mi && (mi.avg_c != null || mi.avg_l != null);
+  const isEmpty = !hasEi && !hasMi;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h3 className="font-semibold text-gray-900">{title}</h3>
+          {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+        </div>
+        {windowCount != null && windowCount > 0 && (
+          <span className="text-xs text-gray-400">{windowCount} window{windowCount !== 1 ? "s" : ""}</span>
+        )}
+        {responseCount != null && (
+          <span className="text-xs text-gray-400">{responseCount} response{responseCount !== 1 ? "s" : ""}</span>
+        )}
+      </div>
+      {isEmpty ? (
+        <p className="text-sm text-gray-400">No responses yet</p>
+      ) : (
+        <div className="space-y-4">
+          {hasEi && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Engagement Index</p>
+              <div className="space-y-1.5">
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Challenge</span><span>/ 10</span></div>
+                  <MetricBar value={ei!.avg_c} max={10} color="bg-green-400" />
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Love</span><span>/ 10</span></div>
+                  <MetricBar value={ei!.avg_l} max={10} color="bg-green-400" />
+                </div>
+              </div>
+            </div>
+          )}
+          {hasMi && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Mattering Index</p>
+              <div className="space-y-1.5">
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Connection</span><span>/ 5</span></div>
+                  <MetricBar value={mi!.avg_c} max={5} color="bg-blue-400" />
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-0.5"><span>Contribution</span><span>/ 5</span></div>
+                  <MetricBar value={mi!.avg_l} max={5} color="bg-blue-400" />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {windowLinks && <div className="mt-4 pt-4 border-t border-gray-50">{windowLinks}</div>}
+    </div>
+  );
+}
+
+function AdminClassDetailPage() {
+  const { classId } = useParams<{ classId: string }>();
+  const navigate = useNavigate();
+  const [data, setData] = useState<AggregateData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`/api/admin/classes/${classId}/aggregates`)
+      .then((r) => r.json())
+      .then((d) => { setData(d as AggregateData); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [classId]);
+
+  if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
+  if (!data) return <div className="text-center text-gray-400 py-12">Class not found.</div>;
+
+  const { cls, latest_window, school_year, lifetime_course } = data;
+
+  return (
+    <div>
+      <button
+        onClick={() => navigate("/admin/classes")}
+        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors mb-6"
+      >
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Back to Classes
+      </button>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6">
+        <h2 className="text-xl font-bold text-gray-900">{cls.name}</h2>
+        <div className="flex flex-wrap gap-3 mt-2 text-sm text-gray-500">
+          {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
+          {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+          <span>· {cls.studentCount} students enrolled</span>
+          {cls.primary_teacher_name && <span>· {cls.primary_teacher_name}</span>}
+          {cls.begin_date && cls.end_date && (
+            <span>· {new Date(cls.begin_date).toLocaleDateString()} – {new Date(cls.end_date).toLocaleDateString()}</span>
+          )}
+        </div>
+        {lifetime_course.total_student_count != null && (
+          <p className="text-xs text-gray-400 mt-1">{lifetime_course.total_student_count} total students across all sections of this course</p>
+        )}
+      </div>
+
+      <div className="space-y-4">
+        <AggSection
+          title="Latest Survey"
+          subtitle={latest_window ? `${latest_window.window.name} · ${new Date(latest_window.window.opens_at).toLocaleDateString()}` : undefined}
+          ei={latest_window?.ei}
+          mi={latest_window?.mi}
+          responseCount={latest_window ? ((latest_window.ei?.cnt ?? 0) + (latest_window.mi?.cnt ?? 0)) : undefined}
+        />
+        <AggSection
+          title="This School Year"
+          subtitle={cls.begin_date ? `Since ${new Date(cls.begin_date).toLocaleDateString()}` : "Last 12 months"}
+          ei={school_year.ei}
+          mi={school_year.mi}
+          windowCount={school_year.window_count}
+        />
+        <AggSection
+          title={`Lifetime — ${cls.name}`}
+          subtitle={`Across all ${lifetime_course.class_count} section${lifetime_course.class_count !== 1 ? "s" : ""} (all teachers)`}
+          ei={lifetime_course.ei}
+          mi={lifetime_course.mi}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -941,6 +1204,7 @@ export default function AdminDashboard() {
     { to: "/admin", label: "Overview", exact: true },
     { to: "/admin/surveys", label: "Surveys" },
     { to: "/admin/users", label: "Users" },
+    { to: "/admin/classes", label: "Classes" },
     { to: "/admin/sync", label: "Veracross Sync" },
   ];
 
@@ -977,6 +1241,8 @@ export default function AdminDashboard() {
           <Route path="/surveys" element={<SurveysPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/users/:userId" element={<UserProfilePage />} />
+          <Route path="/classes" element={<AdminClassesPage />} />
+          <Route path="/classes/:classId" element={<AdminClassDetailPage />} />
           <Route path="/sync" element={<SyncPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>

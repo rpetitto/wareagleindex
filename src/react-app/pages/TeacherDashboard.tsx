@@ -17,6 +17,7 @@ interface TeacherClass {
   grade_level: string | null;
   school_year: string | null;
   term: string | null;
+  veracross_id: string | null;
   studentCount: number;
   windows: ClassWindow[];
 }
@@ -84,13 +85,18 @@ export default function TeacherDashboard() {
               <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
                 {/* Class header */}
                 <div className="px-5 py-4 border-b border-gray-50">
-                  <h2 className="font-semibold text-gray-900 leading-tight">{cls.name}</h2>
+                  <Link to={`/teacher/class/${cls.id}`} className="font-semibold text-gray-900 leading-tight hover:text-crimson transition-colors block">
+                    {cls.name}
+                  </Link>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     {cls.subject && (
                       <span className="text-xs text-gray-400">{cls.subject}</span>
                     )}
                     {cls.grade_level && (
                       <span className="text-xs text-gray-400">· Grade {cls.grade_level}</span>
+                    )}
+                    {cls.veracross_id && (
+                      <span className="text-xs text-gray-300">VC #{cls.veracross_id}</span>
                     )}
                   </div>
                   <div className="flex items-center gap-1 mt-2">
