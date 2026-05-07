@@ -254,12 +254,16 @@ workflow("veracross-sync", {
   async sync_enrollments(ctx: WorkflowCtx): Promise<WorkflowContinuation> {
     const base = getBase();
     const token = await getVCToken();
+    const syncStamp = new Date().toISOString();
 
-    // Filter to current school year on the server to drop past enrollments
-    const schoolYear = currentSchoolYear();
+    // currently_enrolled=true narrows on the server. We don't filter by
+    // school_year here because Veracross encodes it differently across schools
+    // and a wrong value silently returns 0 records. Client-side filters
+    // (date_withdrawn, exclude_from_transcript, non-academic names) handle the
+    // rest.
     const allEnrollments = await vcGet<VCEnrollment>(
       base,
-      `academics/enrollments?currently_enrolled=true&school_year=${schoolYear}`,
+      `academics/enrollments?currently_enrolled=true`,
       token
     );
 
@@ -330,8 +334,11 @@ workflow("veracross-sync", {
       const classId = classIdByVcId.get(String(e.internal_class_id));
       if (!studentUserId || !classId) continue;
       enrollStmts.push(
-        db.prepare(`INSERT OR IGNORE INTO enrollments (id, student_id, class_id) VALUES (?1, ?2, ?3)`)
-          .bind(crypto.randomUUID(), studentUserId, classId)
+        db.prepare(
+          `INSERT INTO enrollments (id, student_id, class_id, last_synced_at)
+           VALUES (?1, ?2, ?3, ?4)
+           ON CONFLICT(student_id, class_id) DO UPDATE SET last_synced_at = excluded.last_synced_at`
+        ).bind(crypto.randomUUID(), studentUserId, classId, syncStamp)
       );
     }
     await batchRun(enrollStmts);
@@ -346,10 +353,29 @@ workflow("veracross-sync", {
       .all<{ class_id: string; teacher_id: string }>();
 
     const teacherStmts = (teacherLinks.results ?? []).map((link) =>
-      db.prepare(`INSERT OR IGNORE INTO teacher_classes (id, teacher_id, class_id) VALUES (?1, ?2, ?3)`)
-        .bind(crypto.randomUUID(), link.teacher_id, link.class_id)
+      db.prepare(
+        `INSERT INTO teacher_classes (id, teacher_id, class_id, last_synced_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(teacher_id, class_id) DO UPDATE SET last_synced_at = excluded.last_synced_at`
+      ).bind(crypto.randomUUID(), link.teacher_id, link.class_id, syncStamp)
     );
     await batchRun(teacherStmts);
+
+    // Drop stale rows that weren't seen in this sync.
+    // Only do the cleanup if we actually synced something — protects against
+    // an empty Veracross response wiping the DB.
+    if (enrollStmts.length > 0) {
+      await db
+        .prepare(`DELETE FROM enrollments WHERE last_synced_at IS NULL OR last_synced_at < ?1`)
+        .bind(syncStamp)
+        .run();
+    }
+    if (teacherStmts.length > 0) {
+      await db
+        .prepare(`DELETE FROM teacher_classes WHERE last_synced_at IS NULL OR last_synced_at < ?1`)
+        .bind(syncStamp)
+        .run();
+    }
 
     const logId = (await ctx.get("logId")) as string;
     await db

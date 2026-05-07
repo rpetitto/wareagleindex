@@ -23,6 +23,15 @@ migrate("004_sync_phases", async () => {
   } catch { /* column already exists */ }
 });
 
+migrate("005_synced_at_columns", async () => {
+  try {
+    await db.prepare(`ALTER TABLE enrollments ADD COLUMN last_synced_at TEXT`).run();
+  } catch { /* column already exists */ }
+  try {
+    await db.prepare(`ALTER TABLE teacher_classes ADD COLUMN last_synced_at TEXT`).run();
+  } catch { /* column already exists */ }
+});
+
 migrate("002_classes_teacher_fields", async () => {
   // Add teacher info columns to classes (safe if already exists)
   try {
