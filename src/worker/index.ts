@@ -792,24 +792,21 @@ app.get("/api/admin/surveys/:windowId/detail", async (c) => {
     .first<{ id: string; name: string; type: string; opens_at: string; closes_at: string; target_all: number }>();
   if (!win) return c.json({ error: "Not found" }, 404);
 
-  // Eligible students (distinct) and expected submissions (student-class pairs)
+  // Eligible = distinct students enrolled in targeted classes
   let eligible: number;
-  let expectedSubmissions: number;
   if (win.target_all === 1) {
-    const row = await db.prepare(`SELECT COUNT(DISTINCT student_id) as cnt, COUNT(*) as pairs FROM enrollments`).first<{ cnt: number; pairs: number }>();
+    const row = await db.prepare(`SELECT COUNT(DISTINCT student_id) as cnt FROM enrollments`).first<{ cnt: number }>();
     eligible = row?.cnt ?? 0;
-    expectedSubmissions = row?.pairs ?? 0;
   } else {
     const row = await db
       .prepare(
-        `SELECT COUNT(DISTINCT e.student_id) as cnt, COUNT(*) as pairs
+        `SELECT COUNT(DISTINCT e.student_id) as cnt
          FROM enrollments e JOIN survey_window_classes swc ON swc.class_id = e.class_id
          WHERE swc.survey_window_id = ?1`
       )
       .bind(windowId)
-      .first<{ cnt: number; pairs: number }>();
+      .first<{ cnt: number }>();
     eligible = row?.cnt ?? 0;
-    expectedSubmissions = row?.pairs ?? 0;
   }
 
   // Responses
@@ -820,6 +817,7 @@ app.get("/api/admin/surveys/:windowId/detail", async (c) => {
         `SELECT er.id,
                 er.student_id,
                 COALESCE(er.student_name, u.name) as student_name,
+                u.picture as student_picture,
                 er.class_id,
                 COALESCE(er.class_name, c.name) as class_name,
                 COALESCE(er.teacher_name, c.primary_teacher_name) as teacher_name,
@@ -828,7 +826,7 @@ app.get("/api/admin/surveys/:windowId/detail", async (c) => {
          LEFT JOIN users u ON u.id = er.student_id
          LEFT JOIN classes c ON c.id = er.class_id
          WHERE er.survey_window_id = ?1
-         ORDER BY er.submitted_at DESC`
+         ORDER BY er.student_name, er.submitted_at DESC`
       )
       .bind(windowId)
       .all();
@@ -839,6 +837,7 @@ app.get("/api/admin/surveys/:windowId/detail", async (c) => {
         `SELECT mr.id,
                 mr.student_id,
                 COALESCE(mr.student_name, u.name) as student_name,
+                u.picture as student_picture,
                 mr.class_id,
                 COALESCE(mr.class_name, c.name) as class_name,
                 COALESCE(mr.teacher_name, c.primary_teacher_name) as teacher_name,
@@ -847,14 +846,14 @@ app.get("/api/admin/surveys/:windowId/detail", async (c) => {
          LEFT JOIN users u ON u.id = mr.student_id
          LEFT JOIN classes c ON c.id = mr.class_id
          WHERE mr.survey_window_id = ?1
-         ORDER BY mr.submitted_at DESC`
+         ORDER BY mr.student_name, mr.submitted_at DESC`
       )
       .bind(windowId)
       .all();
     responses = rows.results ?? [];
   }
 
-  return c.json({ window: win, eligible, expectedSubmissions, responses });
+  return c.json({ window: win, eligible, responses });
 });
 
 app.delete("/api/admin/responses/:type/:id", async (c) => {

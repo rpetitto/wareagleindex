@@ -182,6 +182,7 @@ interface SurveyResponse {
   id: string;
   student_id: string;
   student_name: string | null;
+  student_picture: string | null;
   class_id: string;
   class_name: string | null;
   teacher_name: string | null;
@@ -195,7 +196,6 @@ interface SurveyResponse {
 interface SurveyDetail {
   window: { id: string; name: string; type: string; opens_at: string; closes_at: string };
   eligible: number;
-  expectedSubmissions: number;
   responses: SurveyResponse[];
 }
 
@@ -295,6 +295,8 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   const [filterClasses, setFilterClasses] = useState<Set<string>>(new Set());
   const [activeQuadrant, setActiveQuadrant] = useState<Quadrant | null>(null);
   const [showSubmissions, setShowSubmissions] = useState(false);
+  const [submissionSearch, setSubmissionSearch] = useState("");
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   function reload() {
@@ -304,7 +306,7 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   }
 
   async function deleteResponse(responseId: string, type: string) {
-    if (!confirm("Delete this submission? The student will be able to retake the survey.")) return;
+    if (!confirm("Delete this rating? The student can re-rate this class.")) return;
     setDeletingId(responseId);
     try {
       await fetch(`/api/admin/responses/${type}/${responseId}`, { method: "DELETE" });
@@ -323,6 +325,8 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
     setFilterClasses(new Set());
     setActiveQuadrant(null);
     setShowSubmissions(false);
+    setSubmissionSearch("");
+    setSelectedStudentId(null);
     fetch(`/api/admin/surveys/${windowId}/detail`)
       .then((r) => r.json())
       .then((d) => { setDetail(d as SurveyDetail); setLoading(false); })
@@ -409,8 +413,21 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
   if (!detail) return <div className="text-center text-gray-400 py-12">Survey not found.</div>;
 
-  const { window: win, expectedSubmissions, responses } = detail;
-  const pct = expectedSubmissions > 0 ? Math.round((responses.length / expectedSubmissions) * 100) : 0;
+  const { window: win, eligible, responses } = detail;
+  const submittedStudents = useMemo(() => new Set(responses.map((r) => r.student_id)).size, [responses]);
+  const pct = eligible > 0 ? Math.round((submittedStudents / eligible) * 100) : 0;
+
+  // Group responses by student for the submissions view
+  const byStudent = useMemo(() => {
+    const map = new Map<string, { name: string | null; picture: string | null; ratings: SurveyResponse[] }>();
+    for (const r of responses) {
+      if (!map.has(r.student_id)) map.set(r.student_id, { name: r.student_name, picture: r.student_picture, ratings: [] });
+      map.get(r.student_id)!.ratings.push(r);
+    }
+    return Array.from(map.entries())
+      .map(([id, s]) => ({ id, ...s }))
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+  }, [responses]);
   const isEI = win.type === "engagement_index";
   const isMI = win.type === "mattering_index";
 
@@ -446,19 +463,19 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
         </p>
       </div>
 
-      {/* Completion bar (clickable to view submissions) */}
+      {/* Completion bar — click to view submissions */}
       <button
         type="button"
-        onClick={() => setShowSubmissions((v) => !v)}
-        className="w-full bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-left hover:border-crimson/40 hover:shadow transition cursor-pointer"
+        onClick={() => { setShowSubmissions((v) => !v); setSelectedStudentId(null); setSubmissionSearch(""); }}
+        className="w-full bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-left hover:border-crimson/40 hover:shadow transition"
       >
         <div className="flex items-baseline justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">
-            <strong className="text-gray-900">{responses.length}</strong> submissions of <strong className="text-gray-900">{expectedSubmissions}</strong> expected
+            <strong className="text-gray-900">{submittedStudents}</strong> of <strong className="text-gray-900">{eligible}</strong> students submitted
           </span>
           <span className="text-sm font-bold text-crimson flex items-center gap-2">
             {pct}%
-            <span className="text-gray-400 text-xs">{showSubmissions ? "▴" : "▾"}</span>
+            <span className="text-gray-400 text-xs font-normal">{showSubmissions ? "▴" : "▾"}</span>
           </span>
         </div>
         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -466,42 +483,103 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
         </div>
       </button>
 
-      {/* Submissions list */}
+      {/* Submissions panel */}
       {showSubmissions && (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-            <span className="text-sm font-semibold text-gray-700">All submissions ({responses.length})</span>
-          </div>
-          {responses.length === 0 ? (
-            <div className="text-center text-gray-400 py-8 text-sm">No submissions yet.</div>
-          ) : (
-            <div className="divide-y divide-gray-50 max-h-[480px] overflow-y-auto">
-              {responses.map((r) => (
-                <div key={r.id} className="flex items-center gap-3 px-4 py-3">
-                  {isEI && r.challenge != null && r.love != null ? (
-                    <MiniDot challenge={r.challenge} love={r.love} />
+          {selectedStudentId ? (() => {
+            const student = byStudent.find((s) => s.id === selectedStudentId);
+            if (!student) return null;
+            const eiPoints = student.ratings
+              .filter((r) => r.challenge != null && r.love != null)
+              .map((r) => ({ challenge: r.challenge!, love: r.love! }));
+            return (
+              <>
+                <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-3">
+                  <button onClick={() => setSelectedStudentId(null)} className="text-xs text-gray-500 hover:text-gray-900 transition">← Back</button>
+                  {student.picture ? (
+                    <img src={student.picture} className="w-7 h-7 rounded-full object-cover" />
                   ) : (
-                    <div className="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">
-                      {isMI ? `C:${r.connection}/Co:${r.contribution}` : "—"}
+                    <div className="w-7 h-7 rounded-full bg-crimson text-white flex items-center justify-center text-xs font-bold shrink-0">
+                      {student.name?.charAt(0) ?? "?"}
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm text-gray-900 truncate">{r.student_name ?? "Unknown"}</div>
-                    <div className="text-xs text-gray-500 truncate">{r.class_name ?? "—"}</div>
-                    {r.teacher_name && <div className="text-xs text-gray-400 truncate">{r.teacher_name}</div>}
-                    <div className="text-[10px] text-gray-400 mt-0.5">{new Date(r.submitted_at).toLocaleString()}</div>
-                  </div>
-                  <button
-                    onClick={() => deleteResponse(r.id, win.type)}
-                    disabled={deletingId === r.id}
-                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition disabled:opacity-40"
-                    title="Delete submission (allow retake)"
-                  >
-                    {deletingId === r.id ? "Deleting…" : "Delete"}
-                  </button>
+                  <span className="font-semibold text-sm text-gray-900">{student.name}</span>
+                  <span className="text-xs text-gray-400 ml-auto">{student.ratings.length} ratings</span>
                 </div>
-              ))}
-            </div>
+                {isEI && eiPoints.length > 0 && (
+                  <div className="px-4 pt-4 pb-2">
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Aggregate</p>
+                    <QuadrantScatter responses={eiPoints} />
+                  </div>
+                )}
+                <div className="divide-y divide-gray-50">
+                  {student.ratings.map((r) => (
+                    <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+                      {isEI && r.challenge != null && r.love != null ? (
+                        <MiniDot challenge={r.challenge} love={r.love} />
+                      ) : (
+                        <div className="w-20 h-20 shrink-0 bg-gray-50 rounded-lg flex items-center justify-center text-xs text-gray-400">
+                          {isMI ? `${r.connection} / ${r.contribution}` : "—"}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm text-gray-900 truncate">{r.class_name ?? "—"}</div>
+                        {r.teacher_name && <div className="text-xs text-gray-500">{r.teacher_name}</div>}
+                        {isEI && r.challenge != null && (
+                          <div className="text-xs text-gray-400 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => deleteResponse(r.id, win.type)}
+                        disabled={deletingId === r.id}
+                        className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition disabled:opacity-40 shrink-0"
+                      >
+                        {deletingId === r.id ? "…" : "Delete"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })() : (
+            <>
+              <div className="px-4 py-3 border-b border-gray-100">
+                <input
+                  type="text"
+                  placeholder="Search students…"
+                  value={submissionSearch}
+                  onChange={(e) => setSubmissionSearch(e.target.value)}
+                  className="w-full text-sm px-3 py-1.5 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-crimson/30"
+                  autoFocus
+                />
+              </div>
+              {byStudent.length === 0 ? (
+                <div className="text-center text-gray-400 py-8 text-sm">No submissions yet.</div>
+              ) : (
+                <div className="divide-y divide-gray-50 max-h-[400px] overflow-y-auto">
+                  {byStudent
+                    .filter((s) => !submissionSearch || (s.name ?? "").toLowerCase().includes(submissionSearch.toLowerCase()))
+                    .map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => setSelectedStudentId(s.id)}
+                        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition text-left"
+                      >
+                        {s.picture ? (
+                          <img src={s.picture} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-crimson text-white flex items-center justify-center text-xs font-bold shrink-0">
+                            {s.name?.charAt(0) ?? "?"}
+                          </div>
+                        )}
+                        <span className="flex-1 text-sm font-medium text-gray-900">{s.name ?? "Unknown"}</span>
+                        <span className="text-xs text-gray-400">{s.ratings.length} class{s.ratings.length !== 1 ? "es" : ""} rated</span>
+                        <span className="text-gray-300 text-xs">›</span>
+                      </button>
+                    ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
