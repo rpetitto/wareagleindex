@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import NavBar from "../components/NavBar";
-import QuadrantScatter from "../components/QuadrantScatter";
 
 interface HistoryResponse {
   class_id: string;
@@ -31,15 +30,13 @@ interface SurveyWindow {
   ratings: Array<{ class_id: string; class_name: string; teacher_name: string | null; challenge?: number; love?: number; connection?: number; contribution?: number }>;
 }
 
-const SIZE = 64;
-const PAD = 6;
-const PLOT = SIZE - PAD * 2;
-
-function MiniDot({ challenge, love }: { challenge: number; love: number }) {
-  const x = PAD + ((challenge - 1) / 9) * PLOT;
-  const y = PAD + ((10 - love) / 9) * PLOT;
+function MiniScatter({ points, size = 80, single = false }: { points: { challenge: number; love: number }[]; size?: number; single?: boolean }) {
+  const PAD = 6;
+  const PLOT = size - PAD * 2;
+  const toX = (c: number) => PAD + ((c - 1) / 9) * PLOT;
+  const toY = (l: number) => PAD + ((10 - l) / 9) * PLOT;
   return (
-    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE} className="shrink-0">
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0">
       <rect x={PAD} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(234,179,8,0.12)" />
       <rect x={PAD + PLOT / 2} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(34,197,94,0.12)" />
       <rect x={PAD} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill="rgba(156,163,175,0.12)" />
@@ -47,7 +44,9 @@ function MiniDot({ challenge, love }: { challenge: number; love: number }) {
       <rect x={PAD} y={PAD} width={PLOT} height={PLOT} fill="none" stroke="#e5e7eb" strokeWidth="1" />
       <line x1={PAD + PLOT / 2} y1={PAD} x2={PAD + PLOT / 2} y2={PAD + PLOT} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
       <line x1={PAD} y1={PAD + PLOT / 2} x2={PAD + PLOT} y2={PAD + PLOT / 2} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
-      <circle cx={x} cy={y} r="4" fill="#8B0000" stroke="white" strokeWidth="1.5" />
+      {points.map((p, i) => (
+        <circle key={i} cx={toX(p.challenge)} cy={toY(p.love)} r={single ? 4 : 3} fill="rgba(139,0,0,0.6)" stroke="white" strokeWidth={single ? 1.5 : 0.5} />
+      ))}
     </svg>
   );
 }
@@ -128,7 +127,6 @@ export default function StudentHistory() {
 
             return (
               <div key={w.window_id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                {/* Survey row */}
                 <button
                   onClick={() => setOpenWindowId(isOpen ? null : w.window_id)}
                   className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50 transition-colors"
@@ -139,21 +137,18 @@ export default function StudentHistory() {
                       {new Date(w.opens_at).toLocaleDateString()} · {w.ratings.length} class{w.ratings.length !== 1 ? "es" : ""} rated
                     </div>
                   </div>
-                  {isEI && eiPoints.length > 0 && (
-                    <QuadrantScatter responses={eiPoints} size={120} />
-                  )}
+                  {isEI && eiPoints.length > 0 && <MiniScatter points={eiPoints} size={72} />}
                   <svg className={`w-4 h-4 text-gray-300 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
                 </button>
 
-                {/* Expanded: per-class mini scatters */}
                 {isOpen && (
                   <div className="border-t border-gray-50 divide-y divide-gray-50">
                     {w.ratings.map((r) => (
                       <div key={r.class_id} className="flex items-center gap-4 px-5 py-3">
                         {isEI && r.challenge != null && r.love != null ? (
-                          <MiniDot challenge={r.challenge} love={r.love} />
+                          <MiniScatter points={[{ challenge: r.challenge, love: r.love }]} size={64} single />
                         ) : (
                           <div className="w-16 h-16 shrink-0 bg-gray-50 rounded-lg flex items-center justify-center text-xs text-gray-400">
                             {r.connection != null ? `${r.connection}/${r.contribution}` : "—"}
@@ -178,3 +173,4 @@ export default function StudentHistory() {
     </div>
   );
 }
+

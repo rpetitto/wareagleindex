@@ -1325,18 +1325,35 @@ interface UserProfileData {
   profile: { id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string; created_at: string };
   classes: UserClass[];
   teaches: TaughtClass[];
+  stats?: { pending: number; answered: number; flagged: number };
 }
 
-const TYPE_BADGE_PROFILE: Record<string, string> = {
-  engagement_index: "bg-green-100 text-green-700",
-  mattering_index: "bg-blue-100 text-blue-700",
-  dimensions: "bg-purple-100 text-purple-700",
-};
-const TYPE_SHORT_PROFILE: Record<string, string> = {
-  engagement_index: "EI",
-  mattering_index: "MI",
-  dimensions: "ED",
-};
+function syStartFront(): string {
+  const now = new Date();
+  const year = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${year}-08-01`;
+}
+
+function MiniScatterAdmin({ points, size = 80, single = false }: { points: { challenge: number; love: number }[]; size?: number; single?: boolean }) {
+  const PAD = 6;
+  const PLOT = size - PAD * 2;
+  const toX = (c: number) => PAD + ((c - 1) / 9) * PLOT;
+  const toY = (l: number) => PAD + ((10 - l) / 9) * PLOT;
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="shrink-0">
+      <rect x={PAD} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(234,179,8,0.12)" />
+      <rect x={PAD + PLOT / 2} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(34,197,94,0.12)" />
+      <rect x={PAD} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill="rgba(156,163,175,0.12)" />
+      <rect x={PAD + PLOT / 2} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill="rgba(239,68,68,0.12)" />
+      <rect x={PAD} y={PAD} width={PLOT} height={PLOT} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+      <line x1={PAD + PLOT / 2} y1={PAD} x2={PAD + PLOT / 2} y2={PAD + PLOT} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      <line x1={PAD} y1={PAD + PLOT / 2} x2={PAD + PLOT} y2={PAD + PLOT / 2} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      {points.map((p, i) => (
+        <circle key={i} cx={toX(p.challenge)} cy={toY(p.love)} r={single ? 4 : 3} fill="rgba(139,0,0,0.6)" stroke="white" strokeWidth={single ? 1.5 : 0.5} />
+      ))}
+    </svg>
+  );
+}
 
 const ROLE_PROFILE_COLORS: Record<string, string> = {
   admin: "bg-crimson/10 text-crimson",
@@ -1344,48 +1361,22 @@ const ROLE_PROFILE_COLORS: Record<string, string> = {
   student: "bg-gray-100 text-gray-600",
 };
 
-function dimAvg(r: UserResponse, keys: string[]) {
-  const vals = keys.map((k) => r[k as keyof UserResponse] as number | undefined).filter((v) => v != null) as number[];
-  if (!vals.length) return null;
-  return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
-}
-
-function ResponseSummary({ r }: { r: UserResponse }) {
-  if (r.type === "engagement_index") {
-    return (
-      <span className="text-xs text-gray-500">
-        Challenge: <strong>{r.challenge}</strong>/10 · Love: <strong>{r.love}</strong>/10
-      </span>
-    );
-  }
-  if (r.type === "mattering_index") {
-    return (
-      <span className="text-xs text-gray-500">
-        Connection: <strong>{r.connection}</strong>/5 · Contribution: <strong>{r.contribution}</strong>/5
-      </span>
-    );
-  }
-  const beh = dimAvg(r, ["behavioral_effort", "behavioral_focus", "behavioral_respect"]);
-  const cog = dimAvg(r, ["cognitive_clarity", "cognitive_expectations", "cognitive_feedback", "cognitive_challenge"]);
-  const emo = dimAvg(r, ["emotional_known", "emotional_cared", "emotional_motivated", "emotional_enjoyment"]);
-  const ins = dimAvg(r, ["instructional_activities", "instructional_collaboration", "instructional_assignments"]);
-  return (
-    <span className="text-xs text-gray-500">
-      B: <strong>{beh}</strong> · C: <strong>{cog}</strong> · E: <strong>{emo}</strong> · I: <strong>{ins}</strong>
-    </span>
-  );
-}
-
 function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () => void }) {
   const navigate = useNavigate();
   const [data, setData] = useState<UserProfileData | null>(null);
   const [overview, setOverview] = useState<TeacherOverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [drillClassId, setDrillClassId] = useState<string | null>(null);
+  const [showClassList, setShowClassList] = useState(false);
+  const [activeTab, setActiveTab] = useState<"recent" | "ytd" | "lifetime">("recent");
+  const [showBreakdown, setShowBreakdown] = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setDrillClassId(null);
+    setShowClassList(false);
+    setActiveTab("recent");
+    setShowBreakdown(false);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
       .then((d) => {
@@ -1402,11 +1393,43 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       .catch(() => setLoading(false));
   }, [userId]);
 
+  // EI windows for the student, sorted newest first
+  const eiWindows = useMemo(() => {
+    if (!data) return [];
+    type Rating = { class_id: string; class_name: string; teacher_name: string | null; challenge: number; love: number };
+    const map = new Map<string, { window_id: string; window_name: string; opens_at: string; ratings: Rating[] }>();
+    for (const cls of data.classes) {
+      for (const r of cls.responses) {
+        if (r.type !== "engagement_index" || r.challenge == null || r.love == null) continue;
+        if (!map.has(r.window_id)) {
+          map.set(r.window_id, { window_id: r.window_id, window_name: r.window_name, opens_at: r.opens_at, ratings: [] });
+        }
+        map.get(r.window_id)!.ratings.push({
+          class_id: cls.id,
+          class_name: cls.name,
+          teacher_name: cls.primary_teacher_name,
+          challenge: r.challenge,
+          love: r.love,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.opens_at.localeCompare(a.opens_at));
+  }, [data]);
+
   if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
   if (!data?.profile) return <div className="text-center text-gray-400 py-12">User not found.</div>;
 
-  const { profile, classes, teaches } = data;
+  const { profile, classes, teaches, stats } = data;
   const isTeacher = profile.role === "teacher" || profile.role === "admin";
+
+  // Tab data
+  const syStart = syStartFront();
+  const recentWindow = eiWindows[0];
+  const tabWindows =
+    activeTab === "recent" ? (recentWindow ? [recentWindow] : []) :
+    activeTab === "ytd" ? eiWindows.filter((w) => w.opens_at >= syStart) :
+    eiWindows;
+  const tabPoints = tabWindows.flatMap((w) => w.ratings.map((r) => ({ challenge: r.challenge, love: r.love })));
 
   /* ── Drilled into a class ── */
   if (drillClassId) {
@@ -1441,34 +1464,85 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       )}
 
       {/* Header */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm px-6 py-5 mb-6 flex items-center gap-4">
-        {profile.picture ? (
-          <img src={profile.picture} alt={profile.name} className="w-14 h-14 rounded-full object-cover object-top shrink-0" />
-        ) : (
-          <div className="w-14 h-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-500 shrink-0">
-            {profile.name[0]}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm mb-6 overflow-hidden">
+        <div className="px-6 py-5 flex items-center gap-4">
+          {profile.picture ? (
+            <img src={profile.picture} alt={profile.name} className="w-14 h-14 rounded-full object-cover object-top shrink-0" />
+          ) : (
+            <div className="w-14 h-14 rounded-full bg-gray-200 flex items-center justify-center text-xl font-bold text-gray-500 shrink-0">
+              {profile.name[0]}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold text-gray-900">{profile.name}</h2>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ROLE_PROFILE_COLORS[profile.role] ?? "bg-gray-100"}`}>
+                {profile.role}
+              </span>
+            </div>
+            <p className="text-sm text-gray-400">{profile.email}</p>
+            {profile.veracross_id && (
+              <p className="text-xs text-gray-300 mt-0.5">VC #{profile.veracross_id}</p>
+            )}
+          </div>
+          <button
+            onClick={() => setShowClassList((v) => !v)}
+            className="text-right shrink-0 px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <div className="text-2xl font-bold text-crimson flex items-center gap-1.5 justify-end">
+              {isTeacher ? teaches.length : classes.length}
+              <svg className={`w-4 h-4 text-gray-300 transition-transform ${showClassList ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <div className="text-xs text-gray-400">
+              {isTeacher ? "classes taught" : "enrolled classes"}
+            </div>
+          </button>
+        </div>
+        {showClassList && (
+          <div className="border-t border-gray-100 divide-y divide-gray-50 max-h-80 overflow-y-auto">
+            {(isTeacher ? teaches : classes).length === 0 ? (
+              <div className="px-6 py-4 text-sm text-gray-400 text-center">No classes.</div>
+            ) : isTeacher ? (
+              teaches.map((cls) => (
+                <button
+                  key={cls.id}
+                  onClick={() => setDrillClassId(cls.id)}
+                  className="w-full px-6 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-900 truncate">{cls.name}</p>
+                    {cls.grade_level && <p className="text-xs text-gray-400">Grade {cls.grade_level}</p>}
+                  </div>
+                  <span className="text-xs text-gray-400">{cls.student_count} students</span>
+                  <svg className="w-3.5 h-3.5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              ))
+            ) : (
+              classes.map((cls) => (
+                <button
+                  key={cls.id}
+                  onClick={() => setDrillClassId(cls.id)}
+                  className="w-full px-6 py-3 flex items-center gap-3 text-left hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-sm text-gray-900 truncate">{cls.name}</p>
+                    <div className="flex gap-3 text-xs text-gray-400 mt-0.5">
+                      {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
+                      {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                    </div>
+                  </div>
+                  <svg className="w-3.5 h-3.5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              ))
+            )}
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold text-gray-900">{profile.name}</h2>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ROLE_PROFILE_COLORS[profile.role] ?? "bg-gray-100"}`}>
-              {profile.role}
-            </span>
-          </div>
-          <p className="text-sm text-gray-400">{profile.email}</p>
-          {profile.veracross_id && (
-            <p className="text-xs text-gray-300 mt-0.5">VC #{profile.veracross_id}</p>
-          )}
-        </div>
-        <div className="text-right">
-          <div className="text-2xl font-bold text-crimson">
-            {isTeacher ? teaches.length : classes.length}
-          </div>
-          <div className="text-xs text-gray-400">
-            {isTeacher ? "classes taught" : "enrolled classes"}
-          </div>
-        </div>
       </div>
 
       {/* Teacher view: classes they teach */}
@@ -1522,56 +1596,100 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
         </div>
       )}
 
-      {/* Student view: classes + responses */}
+      {/* Student view */}
       {!isTeacher && (
-        classes.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
-            No enrolled classes found.
+        <>
+          {/* Big number tiles */}
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
+              <div className="text-3xl font-bold text-orange-600">{stats?.pending ?? 0}</div>
+              <div className="text-xs text-gray-500 mt-0.5">Pending</div>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
+              <div className="text-3xl font-bold text-green-600">{stats?.answered ?? 0}</div>
+              <div className="text-xs text-gray-500 mt-0.5">Answered</div>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
+              <div className="text-3xl font-bold text-red-600">{stats?.flagged ?? 0}</div>
+              <div className="text-xs text-gray-500 mt-0.5">Flagged</div>
+            </div>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {classes.map((cls) => (
-              <div key={cls.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <button
-                  onClick={() => setDrillClassId(cls.id)}
-                  className="w-full px-5 py-4 border-b border-gray-50 text-left hover:bg-gray-50 transition-colors cursor-pointer flex items-center justify-between gap-2"
-                >
-                  <div>
-                    <h3 className="font-semibold text-gray-900 hover:text-crimson transition-colors">{cls.name}</h3>
-                    <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
-                      {cls.primary_teacher_name && <span>{cls.primary_teacher_name}</span>}
-                      {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
-                    </div>
-                  </div>
-                  <svg className="w-4 h-4 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
 
-                {cls.responses.length === 0 ? (
-                  <div className="px-5 py-3 text-xs text-gray-400">No survey responses yet.</div>
-                ) : (
-                  <div className="divide-y divide-gray-50">
-                    {cls.responses.map((r, i) => (
-                      <div key={`${r.window_id}-${r.type}-${i}`} className="px-5 py-3 flex items-center gap-3">
-                        <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${TYPE_BADGE_PROFILE[r.type] ?? "bg-gray-100 text-gray-600"}`}>
-                          {TYPE_SHORT_PROFILE[r.type] ?? "?"}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-gray-700 truncate">{r.window_name}</p>
-                          <ResponseSummary r={r} />
+          {/* Tab nav */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex border-b border-gray-100">
+              {(["recent", "ytd", "lifetime"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => { setActiveTab(t); setShowBreakdown(false); }}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                    activeTab === t
+                      ? "text-crimson border-b-2 border-crimson -mb-px"
+                      : "text-gray-500 hover:text-gray-900"
+                  }`}
+                >
+                  {t === "recent" ? "Most Recent" : t === "ytd" ? "Year to Date" : "Lifetime"}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-5">
+              {tabPoints.length === 0 ? (
+                <div className="text-center text-gray-400 py-8 text-sm">
+                  No engagement responses {activeTab === "recent" ? "yet" : activeTab === "ytd" ? "this school year" : ""}.
+                </div>
+              ) : (
+                <>
+                  {activeTab === "recent" && recentWindow && (
+                    <p className="text-xs text-gray-500 mb-3">
+                      {recentWindow.window_name} · {new Date(recentWindow.opens_at).toLocaleDateString()}
+                    </p>
+                  )}
+                  <QuadrantScatter responses={tabPoints} />
+                  <button
+                    onClick={() => setShowBreakdown((v) => !v)}
+                    className="mt-4 w-full text-sm text-crimson hover:bg-crimson/5 transition-colors py-2 rounded-lg flex items-center justify-center gap-1.5"
+                  >
+                    {showBreakdown ? "Hide" : "View"} class breakdown ({tabPoints.length} rating{tabPoints.length !== 1 ? "s" : ""})
+                    <svg className={`w-3.5 h-3.5 transition-transform ${showBreakdown ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {showBreakdown && (
+                    <div className="mt-2 border-t border-gray-100 -mx-5 -mb-5">
+                      {tabWindows.map((w) => (
+                        <div key={w.window_id}>
+                          <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-600">
+                            {w.window_name} <span className="text-gray-400 font-normal">· {new Date(w.opens_at).toLocaleDateString()}</span>
+                          </div>
+                          <div className="divide-y divide-gray-50">
+                            {w.ratings.map((r) => (
+                              <button
+                                key={`${w.window_id}-${r.class_id}`}
+                                onClick={() => setDrillClassId(r.class_id)}
+                                className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
+                              >
+                                <MiniScatterAdmin points={[{ challenge: r.challenge, love: r.love }]} size={64} single />
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-sm text-gray-900 truncate">{r.class_name}</div>
+                                  {r.teacher_name && <div className="text-xs text-gray-400">{r.teacher_name}</div>}
+                                  <div className="text-xs text-gray-500 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
+                                </div>
+                                <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <span className="text-xs text-gray-300 shrink-0">
-                          {new Date(r.submitted_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        )
+        </>
       )}
     </div>
   );
