@@ -48,7 +48,7 @@ app.get("/api/auth/callback", async (c) => {
           `INSERT INTO users (id, google_id, email, name, picture, role)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`
         )
-        .bind(newId, googleUser.sub, googleUser.email.toLowerCase(), googleUser.name, googleUser.picture, role)
+        .bind(newId, googleUser.sub, googleUser.email.toLowerCase(), googleUser.name, null, role)
         .run();
       user = { id: newId, role };
     } else {
@@ -1073,7 +1073,35 @@ app.get("/api/admin/users/:userId/profile", async (c) => {
     responses: responsesByClass.get(cls.id) ?? [],
   }));
 
-  return c.json({ profile, teaches: [], classes });
+  // Survey stats for the student
+  const [pendingRow, answeredRow, flaggedRow] = await Promise.all([
+    db.prepare(
+      `SELECT COUNT(DISTINCT sw.id) as cnt FROM survey_windows sw
+       WHERE datetime(sw.opens_at) <= datetime('now')
+         AND datetime(sw.closes_at) >= datetime('now')
+         AND NOT EXISTS (SELECT 1 FROM engagement_responses WHERE student_id = ?1 AND survey_window_id = sw.id)
+         AND NOT EXISTS (SELECT 1 FROM mattering_responses WHERE student_id = ?1 AND survey_window_id = sw.id)`
+    ).bind(userId).first<{ cnt: number }>(),
+    db.prepare(
+      `SELECT COUNT(DISTINCT window_id) as cnt FROM (
+         SELECT survey_window_id AS window_id FROM engagement_responses WHERE student_id = ?1
+         UNION
+         SELECT survey_window_id FROM mattering_responses WHERE student_id = ?1
+       )`
+    ).bind(userId).first<{ cnt: number }>(),
+    db.prepare(
+      `SELECT COUNT(DISTINCT survey_window_id) as cnt FROM engagement_responses
+       WHERE student_id = ?1 AND love <= 3`
+    ).bind(userId).first<{ cnt: number }>(),
+  ]);
+
+  const stats = {
+    pending: pendingRow?.cnt ?? 0,
+    answered: answeredRow?.cnt ?? 0,
+    flagged: flaggedRow?.cnt ?? 0,
+  };
+
+  return c.json({ profile, teaches: [], classes, stats });
 });
 
 app.get("/api/admin/classes", async (c) => {

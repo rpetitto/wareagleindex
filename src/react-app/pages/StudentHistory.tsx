@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import NavBar from "../components/NavBar";
+import QuadrantScatter from "../components/QuadrantScatter";
 
 interface HistoryResponse {
   class_id: string;
@@ -9,55 +10,52 @@ interface HistoryResponse {
   opens_at: string;
   submitted_at: string;
   type: string;
-  // EI
   challenge?: number;
   love?: number;
-  // MI
   connection?: number;
   contribution?: number;
-  // Dimensions - just indicate it exists
-  behavioral_effort?: number;
 }
 
 interface ClassHistory {
   class_id: string;
   class_name: string;
   teacher_name: string | null;
-  subject: string | null;
   responses: HistoryResponse[];
-  latest_at: string;
 }
 
-const TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  engagement_index: { label: "EI", color: "bg-green-100 text-green-700" },
-  mattering_index: { label: "MI", color: "bg-blue-100 text-blue-700" },
-  dimensions: { label: "ED", color: "bg-purple-100 text-purple-700" },
-};
+interface SurveyWindow {
+  window_id: string;
+  window_name: string;
+  opens_at: string;
+  type: string;
+  ratings: Array<{ class_id: string; class_name: string; teacher_name: string | null; challenge?: number; love?: number; connection?: number; contribution?: number }>;
+}
 
-function ResponseScores({ r }: { r: HistoryResponse }) {
-  if (r.type === "engagement_index" && r.challenge != null && r.love != null) {
-    return (
-      <span className="text-xs text-gray-500">
-        Challenge <strong className="text-gray-700">{r.challenge}</strong>/10 · Love <strong className="text-gray-700">{r.love}</strong>/10
-      </span>
-    );
-  }
-  if (r.type === "mattering_index" && r.connection != null && r.contribution != null) {
-    return (
-      <span className="text-xs text-gray-500">
-        Connection <strong className="text-gray-700">{r.connection}</strong>/5 · Contribution <strong className="text-gray-700">{r.contribution}</strong>/5
-      </span>
-    );
-  }
-  if (r.type === "dimensions") {
-    return <span className="text-xs text-gray-500">Dimensions survey</span>;
-  }
-  return null;
+const SIZE = 64;
+const PAD = 6;
+const PLOT = SIZE - PAD * 2;
+
+function MiniDot({ challenge, love }: { challenge: number; love: number }) {
+  const x = PAD + ((challenge - 1) / 9) * PLOT;
+  const y = PAD + ((10 - love) / 9) * PLOT;
+  return (
+    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE} className="shrink-0">
+      <rect x={PAD} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(234,179,8,0.12)" />
+      <rect x={PAD + PLOT / 2} y={PAD} width={PLOT / 2} height={PLOT / 2} fill="rgba(34,197,94,0.12)" />
+      <rect x={PAD} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill="rgba(156,163,175,0.12)" />
+      <rect x={PAD + PLOT / 2} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill="rgba(239,68,68,0.12)" />
+      <rect x={PAD} y={PAD} width={PLOT} height={PLOT} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+      <line x1={PAD + PLOT / 2} y1={PAD} x2={PAD + PLOT / 2} y2={PAD + PLOT} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      <line x1={PAD} y1={PAD + PLOT / 2} x2={PAD + PLOT} y2={PAD + PLOT / 2} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      <circle cx={x} cy={y} r="4" fill="#8B0000" stroke="white" strokeWidth="1.5" />
+    </svg>
+  );
 }
 
 export default function StudentHistory() {
   const [history, setHistory] = useState<ClassHistory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [openWindowId, setOpenWindowId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/student/history")
@@ -66,34 +64,32 @@ export default function StudentHistory() {
       .catch(() => setLoading(false));
   }, []);
 
-  const totalResponses = history.reduce((sum, c) => sum + c.responses.length, 0);
-
-  // Subject overview from EI responses
-  const subjectMap = new Map<string, { challenges: number[]; loves: number[] }>();
-  for (const cls of history) {
-    const subject = cls.subject ?? cls.class_name.split(" ")[0];
-    if (!subjectMap.has(subject)) subjectMap.set(subject, { challenges: [], loves: [] });
-    const entry = subjectMap.get(subject)!;
-    for (const r of cls.responses) {
-      if (r.type === "engagement_index" && r.challenge != null && r.love != null) {
-        entry.challenges.push(r.challenge);
-        entry.loves.push(r.love);
+  // Group by survey window
+  const windows = useMemo<SurveyWindow[]>(() => {
+    const map = new Map<string, SurveyWindow>();
+    for (const cls of history) {
+      for (const r of cls.responses) {
+        if (!map.has(r.window_id)) {
+          map.set(r.window_id, { window_id: r.window_id, window_name: r.window_name, opens_at: r.opens_at, type: r.type, ratings: [] });
+        }
+        map.get(r.window_id)!.ratings.push({
+          class_id: cls.class_id,
+          class_name: cls.class_name,
+          teacher_name: cls.teacher_name,
+          challenge: r.challenge,
+          love: r.love,
+          connection: r.connection,
+          contribution: r.contribution,
+        });
       }
     }
-  }
-  const subjects = Array.from(subjectMap.entries())
-    .filter(([, v]) => v.challenges.length > 0)
-    .map(([subject, v]) => ({
-      subject,
-      avg_challenge: v.challenges.reduce((a, b) => a + b, 0) / v.challenges.length,
-      avg_love: v.loves.reduce((a, b) => a + b, 0) / v.loves.length,
-      count: v.challenges.length,
-    }));
+    return Array.from(map.values()).sort((a, b) => b.opens_at.localeCompare(a.opens_at));
+  }, [history]);
 
   return (
     <div className="min-h-screen bg-warm">
       <NavBar />
-      <div className="max-w-3xl mx-auto px-4 py-8">
+      <div className="max-w-xl mx-auto px-4 py-8">
         <div className="flex items-center gap-4 mb-6">
           <Link to="/student" className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -101,90 +97,83 @@ export default function StudentHistory() {
             </svg>
             Back
           </Link>
-          <h1 className="text-2xl font-bold text-gray-900">My Response History</h1>
+          <h1 className="text-2xl font-bold text-gray-900">My Survey History</h1>
         </div>
 
         {/* Stats */}
-        <div className="bg-white rounded-xl border border-gray-100 p-4 mb-6 flex items-center gap-4">
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 mb-6 flex gap-6">
           <div className="text-center">
-            <div className="text-3xl font-bold text-crimson">{totalResponses}</div>
-            <div className="text-sm text-gray-500 mt-0.5">Total Responses</div>
+            <div className="text-3xl font-bold text-crimson">{windows.length}</div>
+            <div className="text-sm text-gray-500 mt-0.5">Surveys completed</div>
           </div>
-          <div className="flex-1" />
           <div className="text-center">
-            <div className="text-2xl font-bold text-gray-700">{history.length}</div>
-            <div className="text-sm text-gray-500 mt-0.5">Classes</div>
+            <div className="text-3xl font-bold text-gray-700">{history.flatMap(c => c.responses).length}</div>
+            <div className="text-sm text-gray-500 mt-0.5">Total ratings</div>
           </div>
         </div>
 
         {loading && <div className="text-center text-gray-400 py-12">Loading…</div>}
 
-        {!loading && history.length === 0 && (
+        {!loading && windows.length === 0 && (
           <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400 text-sm">
-            No survey responses yet. Complete a survey to see your history here.
+            No survey responses yet.
           </div>
         )}
 
-        {/* Class cards */}
-        <div className="space-y-4 mb-8">
-          {history.map((cls) => (
-            <div key={cls.class_id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-50">
-                <h2 className="font-semibold text-gray-900">{cls.class_name}</h2>
-                {cls.teacher_name && (
-                  <p className="text-xs text-gray-400 mt-0.5">{cls.teacher_name}</p>
+        <div className="space-y-4">
+          {windows.map((w) => {
+            const eiPoints = w.ratings.filter(r => r.challenge != null && r.love != null).map(r => ({ challenge: r.challenge!, love: r.love! }));
+            const isOpen = openWindowId === w.window_id;
+            const isEI = w.type === "engagement_index";
+
+            return (
+              <div key={w.window_id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                {/* Survey row */}
+                <button
+                  onClick={() => setOpenWindowId(isOpen ? null : w.window_id)}
+                  className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-900">{w.window_name}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {new Date(w.opens_at).toLocaleDateString()} · {w.ratings.length} class{w.ratings.length !== 1 ? "es" : ""} rated
+                    </div>
+                  </div>
+                  {isEI && eiPoints.length > 0 && (
+                    <QuadrantScatter responses={eiPoints} size={120} />
+                  )}
+                  <svg className={`w-4 h-4 text-gray-300 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+
+                {/* Expanded: per-class mini scatters */}
+                {isOpen && (
+                  <div className="border-t border-gray-50 divide-y divide-gray-50">
+                    {w.ratings.map((r) => (
+                      <div key={r.class_id} className="flex items-center gap-4 px-5 py-3">
+                        {isEI && r.challenge != null && r.love != null ? (
+                          <MiniDot challenge={r.challenge} love={r.love} />
+                        ) : (
+                          <div className="w-16 h-16 shrink-0 bg-gray-50 rounded-lg flex items-center justify-center text-xs text-gray-400">
+                            {r.connection != null ? `${r.connection}/${r.contribution}` : "—"}
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm text-gray-900 truncate">{r.class_name}</div>
+                          {r.teacher_name && <div className="text-xs text-gray-400">{r.teacher_name}</div>}
+                          {isEI && r.challenge != null && (
+                            <div className="text-xs text-gray-500 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-              <div className="divide-y divide-gray-50">
-                {cls.responses.map((r, i) => {
-                  const badge = TYPE_LABELS[r.type] ?? { label: "?", color: "bg-gray-100 text-gray-600" };
-                  return (
-                    <div key={`${r.window_id}-${r.type}-${i}`} className="px-5 py-3 flex items-center gap-3">
-                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded shrink-0 ${badge.color}`}>
-                        {badge.label}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-gray-700 truncate">{r.window_name}</p>
-                        <ResponseScores r={r} />
-                      </div>
-                      <span className="text-xs text-gray-300 shrink-0">
-                        {new Date(r.opens_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
-
-        {/* Subject overview */}
-        {subjects.length > 0 && (
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-50">
-              <h3 className="font-semibold text-gray-800 text-sm">Engagement by Subject</h3>
-              <p className="text-xs text-gray-400 mt-0.5">Based on your Engagement Index responses</p>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {subjects.map((s) => (
-                <div key={s.subject} className="px-5 py-3 flex items-center gap-4">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{s.subject}</p>
-                    <p className="text-xs text-gray-400">{s.count} response{s.count !== 1 ? "s" : ""}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-gray-500">
-                      Challenge <strong className="text-gray-700">{s.avg_challenge.toFixed(1)}</strong>/10
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      Love <strong className="text-gray-700">{s.avg_love.toFixed(1)}</strong>/10
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
