@@ -110,7 +110,7 @@ app.get("/api/student/surveys", async (c) => {
        WHERE e.student_id = ?1
          AND (
            e.class_status IS NULL
-           OR CAST(e.class_status AS REAL) != 3
+           OR LOWER(e.class_status) != 'completed'
            OR (c.end_date IS NOT NULL AND c.end_date > datetime('now'))
          )
        ORDER BY c.name`

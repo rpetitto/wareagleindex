@@ -116,29 +116,35 @@ async function getVCToken(): Promise<string> {
   return data.access_token;
 }
 
-async function vcGet<T>(base: string, path: string, token: string, maxPages = 20): Promise<T[]> {
+interface VCValueListItem { id: number | string; description: string }
+interface VCValueList { fields: string[]; items: VCValueListItem[] }
+
+async function vcGet<T>(base: string, path: string, token: string, maxPages = 20, includeValueLists = false): Promise<{ data: T[]; valueLists: VCValueList[] }> {
   const PAGE_SIZE = 1000;
   const all: T[] = [];
   let page = 1;
+  let valueLists: VCValueList[] = [];
 
   while (page <= maxPages) {
-    const res = await fetch(`${base}/${path}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-Page-Size": String(PAGE_SIZE),
-        "X-Page-Number": String(page),
-      },
-    });
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      "X-Page-Size": String(PAGE_SIZE),
+      "X-Page-Number": String(page),
+    };
+    if (includeValueLists && page === 1) headers["X-API-Value-Lists"] = "include";
+
+    const res = await fetch(`${base}/${path}`, { headers });
     if (!res.ok) throw new Error(`Veracross API ${res.status}: /${path}`);
-    const json = (await res.json()) as { data?: T[]; error?: string };
+    const json = (await res.json()) as { data?: T[]; value_lists?: VCValueList[]; error?: string };
     if (json.error) throw new Error(`Veracross /${path}: ${json.error}`);
+    if (page === 1 && json.value_lists) valueLists = json.value_lists;
     const records = json.data ?? [];
     all.push(...records);
     if (records.length < PAGE_SIZE) break;
     page++;
   }
 
-  return all;
+  return { data: all, valueLists };
 }
 
 async function batchRun(stmts: ReturnType<typeof db.prepare>[], size = 100) {
@@ -162,7 +168,7 @@ function currentSchoolYear(): number {
 }
 
 async function loadPhotoMap(base: string, token: string): Promise<Map<number, string>> {
-  const photos = await vcGet<VCPhoto>(base, "person_photos", token);
+  const { data: photos } = await vcGet<VCPhoto>(base, "person_photos", token);
   const map = new Map<number, string>();
   for (const p of photos) map.set(p.person_id, p.download_url);
   return map;
@@ -201,7 +207,7 @@ workflow("veracross-sync", {
     const token = await getVCToken();
     const photoMap = await loadPhotoMap(base, token);
 
-    const allStaff = await vcGet<VCStaff>(base, "staff_faculty", token);
+    const { data: allStaff } = await vcGet<VCStaff>(base, "staff_faculty", token);
     const faculty = allStaff.filter((s) => (s.roles ?? "").includes("Faculty"));
 
     const stmts = faculty.flatMap((f) => {
@@ -238,7 +244,7 @@ workflow("veracross-sync", {
     const token = await getVCToken();
     const photoMap = await loadPhotoMap(base, token);
 
-    const students = await vcGet<VCStudent>(base, "students", token);
+    const { data: students } = await vcGet<VCStudent>(base, "students", token);
 
     const stmts = students.flatMap((s) => {
       const email = (s.email_1 || s.username || "").toLowerCase().trim();
@@ -290,7 +296,7 @@ workflow("veracross-sync", {
     // Used to populate begin_date/end_date on classes (fail-soft).
     const gpDates = new Map<number, { begin_date: string; end_date: string }>();
     try {
-      const gps = await vcGet<VCGradingPeriod>(
+      const { data: gps } = await vcGet<VCGradingPeriod>(
         base,
         `academics/config/grading_periods?school_year=${schoolYear}`,
         token,
@@ -312,7 +318,7 @@ workflow("veracross-sync", {
     // filters are sufficient gatekeeping.
     const classDateRange = new Map<number, { begin_date: string; end_date: string }>();
     try {
-      const schedules = await vcGet<VCClassSchedule>(base, `academics/class_schedules`, token, 20);
+      const { data: schedules } = await vcGet<VCClassSchedule>(base, `academics/class_schedules`, token, 20);
       console.log(`class_schedules: ${schedules.length} rows`);
       for (const s of schedules) {
         const gpId = s.grading_period?.id;
@@ -334,22 +340,38 @@ workflow("veracross-sync", {
       console.warn(`class_schedules fetch failed, skipping date ranges:`, err);
     }
 
-    const allEnrollments = await vcGet<VCEnrollment>(
+    const { data: allEnrollments, valueLists } = await vcGet<VCEnrollment>(
       base,
       `academics/enrollments?currently_enrolled=true`,
-      token
+      token,
+      20,
+      true  // request value lists to decode class_status
     );
+
+    // Build id → description map for class_status from value lists
+    const classStatusVL = valueLists.find((vl) => vl.fields.includes("class_status"));
+    const classStatusDesc = new Map<string, string>();
+    if (classStatusVL) {
+      for (const item of classStatusVL.items) {
+        classStatusDesc.set(String(item.id), item.description);
+      }
+      console.log("class_status value list:", JSON.stringify(classStatusVL.items));
+    }
 
     // course_type 3 = Academic, 4 = Non-Academic (per Veracross standard types)
     const ALLOWED_COURSE_TYPES = new Set([3, 4]);
     const activeEnrollments = allEnrollments.filter(
-      (e) =>
-        e.currently_enrolled &&
-        e.exclude_from_transcript !== true &&
-        Number(e.class_status) !== 2 && /* 2 = future */
-        !isWithdrawn(e.date_withdrawn) &&
-        !isNonAcademic(e.class_description ?? "") &&
-        (e.course_type == null || ALLOWED_COURSE_TYPES.has(e.course_type))
+      (e) => {
+        const statusDesc = classStatusDesc.get(String(e.class_status))?.toLowerCase() ?? "";
+        return (
+          e.currently_enrolled &&
+          e.exclude_from_transcript !== true &&
+          statusDesc !== "future" &&
+          !isWithdrawn(e.date_withdrawn) &&
+          !isNonAcademic(e.class_description ?? "") &&
+          (e.course_type == null || ALLOWED_COURSE_TYPES.has(e.course_type))
+        );
+      }
     );
 
     interface ClassInfo {
@@ -421,7 +443,7 @@ workflow("veracross-sync", {
           `INSERT INTO enrollments (id, student_id, class_id, class_status, last_synced_at)
            VALUES (?1, ?2, ?3, ?4, ?5)
            ON CONFLICT(student_id, class_id) DO UPDATE SET class_status = excluded.class_status, last_synced_at = excluded.last_synced_at`
-        ).bind(crypto.randomUUID(), studentUserId, classId, e.class_status ?? null, syncStamp)
+        ).bind(crypto.randomUUID(), studentUserId, classId, classStatusDesc.get(String(e.class_status)) ?? String(e.class_status ?? ""), syncStamp)
       );
     }
     await batchRun(enrollStmts);
