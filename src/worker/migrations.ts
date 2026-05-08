@@ -1,5 +1,9 @@
 import { migrate, db } from "flingit";
 
+migrate("008_enrollment_class_status", async () => {
+  try { await db.prepare(`ALTER TABLE enrollments ADD COLUMN class_status TEXT`).run(); } catch { /* exists */ }
+});
+
 migrate("007_response_snapshots", async () => {
   // engagement_responses
   try { await db.prepare(`ALTER TABLE engagement_responses ADD COLUMN class_name TEXT`).run(); } catch { /* exists */ }

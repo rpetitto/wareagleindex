@@ -418,10 +418,10 @@ workflow("veracross-sync", {
       if (!studentUserId || !classId) continue;
       enrollStmts.push(
         db.prepare(
-          `INSERT INTO enrollments (id, student_id, class_id, last_synced_at)
-           VALUES (?1, ?2, ?3, ?4)
-           ON CONFLICT(student_id, class_id) DO UPDATE SET last_synced_at = excluded.last_synced_at`
-        ).bind(crypto.randomUUID(), studentUserId, classId, syncStamp)
+          `INSERT INTO enrollments (id, student_id, class_id, class_status, last_synced_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(student_id, class_id) DO UPDATE SET class_status = excluded.class_status, last_synced_at = excluded.last_synced_at`
+        ).bind(crypto.randomUUID(), studentUserId, classId, e.class_status ?? null, syncStamp)
       );
     }
     await batchRun(enrollStmts);

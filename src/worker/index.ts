@@ -107,7 +107,9 @@ app.get("/api/student/surveys", async (c) => {
     .prepare(
       `SELECT c.id, c.name, c.subject, c.grade_level, c.begin_date, c.end_date
        FROM enrollments e JOIN classes c ON c.id = e.class_id
-       WHERE e.student_id = ?1 ORDER BY c.name`
+       WHERE e.student_id = ?1
+         AND (e.class_status IS NULL OR LOWER(e.class_status) != 'completed')
+       ORDER BY c.name`
     )
     .bind(user.id)
     .all<{ id: string; name: string; subject: string | null; grade_level: string | null; begin_date: string | null; end_date: string | null }>();
