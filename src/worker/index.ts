@@ -662,7 +662,7 @@ app.get("/api/admin/flagged", async (c) => {
   // i.e. love <= 5 for any challenge value
   const windowFilter = windowId ? `AND er.survey_window_id = '${windowId}'` : "";
 
-  // Flagged = response with love <= 2 (very bored or very anxious).
+  // Flagged = response with love <= 3 (very bored or very anxious).
   // Only include students who have 4+ such responses within the scope.
   const rows = await db
     .prepare(
@@ -674,7 +674,7 @@ app.get("/api/admin/flagged", async (c) => {
          JOIN survey_windows sw ON sw.id = er.survey_window_id
          JOIN users u ON u.id = er.student_id
          LEFT JOIN classes c ON c.id = er.class_id
-         WHERE er.love <= 2
+         WHERE er.love <= 3
            ${windowFilter}
        ),
        qualifying AS (
