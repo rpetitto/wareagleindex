@@ -53,15 +53,14 @@ app.get("/api/auth/callback", async (c) => {
       user = { id: newId, role };
     } else {
       // Update google_id/name; promote to admin if email matches.
-      // Do NOT overwrite picture — Veracross photo (synced) takes precedence.
-      // Only set picture if missing.
+      // Never store Google photos — only Veracross-synced photos are used.
       const newRole = isAdminEmail ? "admin" : user.role;
       await db
         .prepare(
-          `UPDATE users SET google_id = ?1, name = ?2, picture = COALESCE(picture, ?3), role = ?4, updated_at = datetime('now')
-           WHERE id = ?5`
+          `UPDATE users SET google_id = ?1, name = ?2, role = ?3, updated_at = datetime('now')
+           WHERE id = ?4`
         )
-        .bind(googleUser.sub, googleUser.name, googleUser.picture, newRole, user.id)
+        .bind(googleUser.sub, googleUser.name, newRole, user.id)
         .run();
       user = { ...user, role: newRole };
     }

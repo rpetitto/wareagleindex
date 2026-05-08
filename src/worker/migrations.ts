@@ -1,5 +1,9 @@
 import { migrate, db } from "flingit";
 
+migrate("009_clear_google_photos", async () => {
+  await db.prepare(`UPDATE users SET picture = NULL WHERE picture LIKE '%googleusercontent.com%'`).run();
+});
+
 migrate("008_enrollment_class_status", async () => {
   try { await db.prepare(`ALTER TABLE enrollments ADD COLUMN class_status TEXT`).run(); } catch { /* exists */ }
 });
