@@ -179,6 +179,7 @@ function OverviewPage() {
 // ─── Survey Detail Panel ──────────────────────────────────────────────────────
 
 interface SurveyResponse {
+  id: string;
   student_id: string;
   student_name: string | null;
   class_id: string;
@@ -194,6 +195,7 @@ interface SurveyResponse {
 interface SurveyDetail {
   window: { id: string; name: string; type: string; opens_at: string; closes_at: string };
   eligible: number;
+  expectedSubmissions: number;
   responses: SurveyResponse[];
 }
 
@@ -292,6 +294,25 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   const [filterCourses, setFilterCourses] = useState<Set<string>>(new Set());
   const [filterClasses, setFilterClasses] = useState<Set<string>>(new Set());
   const [activeQuadrant, setActiveQuadrant] = useState<Quadrant | null>(null);
+  const [showSubmissions, setShowSubmissions] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  function reload() {
+    fetch(`/api/admin/surveys/${windowId}/detail`)
+      .then((r) => r.json())
+      .then((d) => { setDetail(d as SurveyDetail); });
+  }
+
+  async function deleteResponse(responseId: string, type: string) {
+    if (!confirm("Delete this submission? The student will be able to retake the survey.")) return;
+    setDeletingId(responseId);
+    try {
+      await fetch(`/api/admin/responses/${type}/${responseId}`, { method: "DELETE" });
+      reload();
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -301,6 +322,7 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
     setFilterCourses(new Set());
     setFilterClasses(new Set());
     setActiveQuadrant(null);
+    setShowSubmissions(false);
     fetch(`/api/admin/surveys/${windowId}/detail`)
       .then((r) => r.json())
       .then((d) => { setDetail(d as SurveyDetail); setLoading(false); })
@@ -387,8 +409,8 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
   if (!detail) return <div className="text-center text-gray-400 py-12">Survey not found.</div>;
 
-  const { window: win, eligible, responses } = detail;
-  const pct = eligible > 0 ? Math.round((responses.length / eligible) * 100) : 0;
+  const { window: win, expectedSubmissions, responses } = detail;
+  const pct = expectedSubmissions > 0 ? Math.round((responses.length / expectedSubmissions) * 100) : 0;
   const isEI = win.type === "engagement_index";
   const isMI = win.type === "mattering_index";
 
@@ -424,18 +446,65 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
         </p>
       </div>
 
-      {/* Completion bar */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+      {/* Completion bar (clickable to view submissions) */}
+      <button
+        type="button"
+        onClick={() => setShowSubmissions((v) => !v)}
+        className="w-full bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-left hover:border-crimson/40 hover:shadow transition cursor-pointer"
+      >
         <div className="flex items-baseline justify-between mb-2">
           <span className="text-sm font-medium text-gray-700">
-            {responses.length} of {eligible} eligible students responded
+            <strong className="text-gray-900">{responses.length}</strong> submissions of <strong className="text-gray-900">{expectedSubmissions}</strong> expected
           </span>
-          <span className="text-sm font-bold text-crimson">{pct}%</span>
+          <span className="text-sm font-bold text-crimson flex items-center gap-2">
+            {pct}%
+            <span className="text-gray-400 text-xs">{showSubmissions ? "▴" : "▾"}</span>
+          </span>
         </div>
         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
           <div className="h-full bg-crimson rounded-full transition-all" style={{ width: `${pct}%` }} />
         </div>
-      </div>
+      </button>
+
+      {/* Submissions list */}
+      {showSubmissions && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-700">All submissions ({responses.length})</span>
+          </div>
+          {responses.length === 0 ? (
+            <div className="text-center text-gray-400 py-8 text-sm">No submissions yet.</div>
+          ) : (
+            <div className="divide-y divide-gray-50 max-h-[480px] overflow-y-auto">
+              {responses.map((r) => (
+                <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+                  {isEI && r.challenge != null && r.love != null ? (
+                    <MiniDot challenge={r.challenge} love={r.love} />
+                  ) : (
+                    <div className="w-20 h-20 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">
+                      {isMI ? `C:${r.connection}/Co:${r.contribution}` : "—"}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm text-gray-900 truncate">{r.student_name ?? "Unknown"}</div>
+                    <div className="text-xs text-gray-500 truncate">{r.class_name ?? "—"}</div>
+                    {r.teacher_name && <div className="text-xs text-gray-400 truncate">{r.teacher_name}</div>}
+                    <div className="text-[10px] text-gray-400 mt-0.5">{new Date(r.submitted_at).toLocaleString()}</div>
+                  </div>
+                  <button
+                    onClick={() => deleteResponse(r.id, win.type)}
+                    disabled={deletingId === r.id}
+                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition disabled:opacity-40"
+                    title="Delete submission (allow retake)"
+                  >
+                    {deletingId === r.id ? "Deleting…" : "Delete"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
