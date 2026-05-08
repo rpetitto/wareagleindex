@@ -344,7 +344,7 @@ workflow("veracross-sync", {
       base,
       `academics/enrollments?currently_enrolled=true`,
       token,
-      20,
+      100,
       true  // request value lists to decode class_status
     );
 
