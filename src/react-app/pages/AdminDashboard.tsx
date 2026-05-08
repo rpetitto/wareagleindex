@@ -402,6 +402,21 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
 
   const anyFilterActive = filterStudents.size > 0 || filterTeachers.size > 0 || filterCourses.size > 0 || filterClasses.size > 0 || activeQuadrant != null;
 
+  const responses = detail?.responses ?? [];
+
+  const submittedStudents = useMemo(() => new Set(responses.map((r) => r.student_id)).size, [responses]);
+
+  const byStudent = useMemo(() => {
+    const map = new Map<string, { name: string | null; picture: string | null; ratings: SurveyResponse[] }>();
+    for (const r of responses) {
+      if (!map.has(r.student_id)) map.set(r.student_id, { name: r.student_name, picture: r.student_picture, ratings: [] });
+      map.get(r.student_id)!.ratings.push(r);
+    }
+    return Array.from(map.entries())
+      .map(([id, s]) => ({ id, ...s }))
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+  }, [responses]);
+
   function clearAll() {
     setFilterStudents(new Set());
     setFilterTeachers(new Set());
@@ -413,21 +428,8 @@ function SurveyDetailPanel({ windowId, onClose: _onClose }: { windowId: string; 
   if (loading) return <div className="text-center text-gray-400 py-12">Loading…</div>;
   if (!detail) return <div className="text-center text-gray-400 py-12">Survey not found.</div>;
 
-  const { window: win, eligible, responses } = detail;
-  const submittedStudents = useMemo(() => new Set(responses.map((r) => r.student_id)).size, [responses]);
+  const { window: win, eligible } = detail;
   const pct = eligible > 0 ? Math.round((submittedStudents / eligible) * 100) : 0;
-
-  // Group responses by student for the submissions view
-  const byStudent = useMemo(() => {
-    const map = new Map<string, { name: string | null; picture: string | null; ratings: SurveyResponse[] }>();
-    for (const r of responses) {
-      if (!map.has(r.student_id)) map.set(r.student_id, { name: r.student_name, picture: r.student_picture, ratings: [] });
-      map.get(r.student_id)!.ratings.push(r);
-    }
-    return Array.from(map.entries())
-      .map(([id, s]) => ({ id, ...s }))
-      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
-  }, [responses]);
   const isEI = win.type === "engagement_index";
   const isMI = win.type === "mattering_index";
 
