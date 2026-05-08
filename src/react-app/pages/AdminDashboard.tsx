@@ -1325,7 +1325,7 @@ interface UserProfileData {
   profile: { id: string; name: string; email: string; picture: string | null; veracross_id: string | null; role: string; created_at: string };
   classes: UserClass[];
   teaches: TaughtClass[];
-  stats?: { pending: number; answered: number; flagged: number };
+  stats?: { pending: number; answered: number; flagged: number; pendingWindows?: Array<{ id: string; name: string; opens_at: string; closes_at: string }> };
 }
 
 function syStartFront(): string {
@@ -1370,6 +1370,8 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
   const [showClassList, setShowClassList] = useState(false);
   const [activeTab, setActiveTab] = useState<"recent" | "ytd" | "lifetime">("recent");
   const [showBreakdown, setShowBreakdown] = useState(false);
+  const [activeTile, setActiveTile] = useState<"pending" | "answered" | "flagged" | null>(null);
+  const [tileWindowId, setTileWindowId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -1377,6 +1379,8 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
     setShowClassList(false);
     setActiveTab("recent");
     setShowBreakdown(false);
+    setActiveTile(null);
+    setTileWindowId(null);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
       .then((d) => {
@@ -1599,96 +1603,193 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       {/* Student view */}
       {!isTeacher && (
         <>
-          {/* Big number tiles */}
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
-              <div className="text-3xl font-bold text-orange-600">{stats?.pending ?? 0}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Pending</div>
-            </div>
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
-              <div className="text-3xl font-bold text-green-600">{stats?.answered ?? 0}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Answered</div>
-            </div>
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center">
-              <div className="text-3xl font-bold text-red-600">{stats?.flagged ?? 0}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Flagged</div>
-            </div>
-          </div>
-
-          {/* Tab nav */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="flex border-b border-gray-100">
-              {(["recent", "ytd", "lifetime"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => { setActiveTab(t); setShowBreakdown(false); }}
-                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                    activeTab === t
-                      ? "text-crimson border-b-2 border-crimson -mb-px"
-                      : "text-gray-500 hover:text-gray-900"
-                  }`}
-                >
-                  {t === "recent" ? "Most Recent" : t === "ytd" ? "Year to Date" : "Lifetime"}
-                </button>
-              ))}
-            </div>
-
-            <div className="p-5">
-              {tabPoints.length === 0 ? (
-                <div className="text-center text-gray-400 py-8 text-sm">
-                  No engagement responses {activeTab === "recent" ? "yet" : activeTab === "ytd" ? "this school year" : ""}.
-                </div>
-              ) : (
-                <>
-                  {activeTab === "recent" && recentWindow && (
-                    <p className="text-xs text-gray-500 mb-3">
-                      {recentWindow.window_name} · {new Date(recentWindow.opens_at).toLocaleDateString()}
-                    </p>
-                  )}
-                  <QuadrantScatter responses={tabPoints} />
+          {/* Big number tiles — clickable */}
+          {(() => {
+            const tiles = [
+              { key: "pending" as const, count: stats?.pending ?? 0, label: "Pending", color: "text-orange-600", activeRing: "ring-orange-300" },
+              { key: "answered" as const, count: stats?.answered ?? 0, label: "Answered", color: "text-green-600", activeRing: "ring-green-300" },
+              { key: "flagged" as const, count: stats?.flagged ?? 0, label: "Flagged", color: "text-red-600", activeRing: "ring-red-300" },
+            ];
+            return (
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                {tiles.map((t) => (
                   <button
-                    onClick={() => setShowBreakdown((v) => !v)}
-                    className="mt-4 w-full text-sm text-crimson hover:bg-crimson/5 transition-colors py-2 rounded-lg flex items-center justify-center gap-1.5"
+                    key={t.key}
+                    onClick={() => { setActiveTile(activeTile === t.key ? null : t.key); setTileWindowId(null); }}
+                    className={`bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-5 text-center hover:shadow-md transition-all cursor-pointer ${activeTile === t.key ? `ring-2 ${t.activeRing}` : ""}`}
                   >
-                    {showBreakdown ? "Hide" : "View"} class breakdown ({tabPoints.length} rating{tabPoints.length !== 1 ? "s" : ""})
-                    <svg className={`w-3.5 h-3.5 transition-transform ${showBreakdown ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <div className={`text-3xl font-bold ${t.color}`}>{t.count}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">{t.label}</div>
                   </button>
-                  {showBreakdown && (
-                    <div className="mt-2 border-t border-gray-100 -mx-5 -mb-5">
-                      {tabWindows.map((w) => (
-                        <div key={w.window_id}>
-                          <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-600">
-                            {w.window_name} <span className="text-gray-400 font-normal">· {new Date(w.opens_at).toLocaleDateString()}</span>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Tile drilldown: survey list */}
+          {activeTile && !tileWindowId && (() => {
+            const flaggedWindowIds = new Set(
+              eiWindows.filter((w) => w.ratings.some((r) => r.love <= 3)).map((w) => w.window_id)
+            );
+            const listWindows =
+              activeTile === "pending"
+                ? (stats?.pendingWindows ?? []).map((w) => ({ window_id: w.id, window_name: w.name, opens_at: w.opens_at, ratings: [] }))
+                : activeTile === "answered"
+                ? eiWindows
+                : eiWindows.filter((w) => flaggedWindowIds.has(w.window_id));
+            return (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-4">
+                <div className="px-5 py-3 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  {activeTile === "pending" ? "Pending Surveys" : activeTile === "answered" ? "Answered Surveys" : "Flagged Surveys"}
+                </div>
+                {listWindows.length === 0 ? (
+                  <div className="px-5 py-6 text-center text-sm text-gray-400">None found.</div>
+                ) : (
+                  <div className="divide-y divide-gray-50">
+                    {listWindows.map((w) => {
+                      const pts = w.ratings.map((r) => ({ challenge: r.challenge, love: r.love }));
+                      return (
+                        <button
+                          key={w.window_id}
+                          onClick={() => activeTile !== "pending" ? setTileWindowId(w.window_id) : undefined}
+                          disabled={activeTile === "pending"}
+                          className={`w-full flex items-center gap-4 px-5 py-3.5 text-left transition-colors ${activeTile !== "pending" ? "hover:bg-gray-50 cursor-pointer" : "cursor-default"}`}
+                        >
+                          {pts.length > 0 && <MiniScatterAdmin points={pts} size={56} />}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-sm text-gray-900">{w.window_name}</div>
+                            <div className="text-xs text-gray-400 mt-0.5">{new Date(w.opens_at).toLocaleDateString()}{pts.length > 0 ? ` · ${pts.length} rating${pts.length !== 1 ? "s" : ""}` : ""}</div>
                           </div>
-                          <div className="divide-y divide-gray-50">
-                            {w.ratings.map((r) => (
-                              <button
-                                key={`${w.window_id}-${r.class_id}`}
-                                onClick={() => setDrillClassId(r.class_id)}
-                                className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
-                              >
-                                <MiniScatterAdmin points={[{ challenge: r.challenge, love: r.love }]} size={64} single />
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-medium text-sm text-gray-900 truncate">{r.class_name}</div>
-                                  {r.teacher_name && <div className="text-xs text-gray-400">{r.teacher_name}</div>}
-                                  <div className="text-xs text-gray-500 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
-                                </div>
-                                <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                </svg>
-                              </button>
-                            ))}
-                          </div>
+                          {activeTile !== "pending" && (
+                            <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Tile drilldown: scatter for a specific window */}
+          {activeTile && tileWindowId && (() => {
+            const w = eiWindows.find((w) => w.window_id === tileWindowId);
+            if (!w) return null;
+            const pts = w.ratings.map((r) => ({ challenge: r.challenge, love: r.love }));
+            return (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-4">
+                <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3">
+                  <button onClick={() => setTileWindowId(null)} className="text-xs text-crimson hover:underline flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                    Back
+                  </button>
+                  <span className="text-xs text-gray-500">{w.window_name} · {new Date(w.opens_at).toLocaleDateString()}</span>
+                </div>
+                <div className="p-5">
+                  <QuadrantScatter responses={pts} />
+                  <div className="mt-4 border-t border-gray-100 -mx-5 -mb-5">
+                    {w.ratings.map((r) => (
+                      <button
+                        key={`${w.window_id}-${r.class_id}`}
+                        onClick={() => setDrillClassId(r.class_id)}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
+                      >
+                        <MiniScatterAdmin points={[{ challenge: r.challenge, love: r.love }]} size={56} single />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm text-gray-900 truncate">{r.class_name}</div>
+                          {r.teacher_name && <div className="text-xs text-gray-400">{r.teacher_name}</div>}
+                          <div className="text-xs text-gray-500 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
+                        <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Tab nav — only shown when no tile is active */}
+          {!activeTile && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="flex border-b border-gray-100">
+                {(["recent", "ytd", "lifetime"] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => { setActiveTab(t); setShowBreakdown(false); }}
+                    className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                      activeTab === t
+                        ? "text-crimson border-b-2 border-crimson -mb-px"
+                        : "text-gray-500 hover:text-gray-900"
+                    }`}
+                  >
+                    {t === "recent" ? "Most Recent" : t === "ytd" ? "Year to Date" : "Lifetime"}
+                  </button>
+                ))}
+              </div>
+
+              <div className="p-5">
+                {tabPoints.length === 0 ? (
+                  <div className="text-center text-gray-400 py-8 text-sm">
+                    No engagement responses {activeTab === "recent" ? "yet" : activeTab === "ytd" ? "this school year" : ""}.
+                  </div>
+                ) : (
+                  <>
+                    {activeTab === "recent" && recentWindow && (
+                      <p className="text-xs text-gray-500 mb-3">
+                        {recentWindow.window_name} · {new Date(recentWindow.opens_at).toLocaleDateString()}
+                      </p>
+                    )}
+                    <QuadrantScatter responses={tabPoints} />
+                    <button
+                      onClick={() => setShowBreakdown((v) => !v)}
+                      className="mt-4 w-full text-sm text-crimson hover:bg-crimson/5 transition-colors py-2 rounded-lg flex items-center justify-center gap-1.5"
+                    >
+                      {showBreakdown ? "Hide" : "View"} class breakdown ({tabPoints.length} rating{tabPoints.length !== 1 ? "s" : ""})
+                      <svg className={`w-3.5 h-3.5 transition-transform ${showBreakdown ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showBreakdown && (
+                      <div className="mt-2 border-t border-gray-100 -mx-5 -mb-5">
+                        {tabWindows.map((w) => (
+                          <div key={w.window_id}>
+                            <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 text-xs font-semibold text-gray-600">
+                              {w.window_name} <span className="text-gray-400 font-normal">· {new Date(w.opens_at).toLocaleDateString()}</span>
+                            </div>
+                            <div className="divide-y divide-gray-50">
+                              {w.ratings.map((r) => (
+                                <button
+                                  key={`${w.window_id}-${r.class_id}`}
+                                  onClick={() => setDrillClassId(r.class_id)}
+                                  className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50 transition-colors"
+                                >
+                                  <MiniScatterAdmin points={[{ challenge: r.challenge, love: r.love }]} size={64} single />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-medium text-sm text-gray-900 truncate">{r.class_name}</div>
+                                    {r.teacher_name && <div className="text-xs text-gray-400">{r.teacher_name}</div>}
+                                    <div className="text-xs text-gray-500 mt-0.5">Challenge: {r.challenge} · Love: {r.love}</div>
+                                  </div>
+                                  <svg className="w-3.5 h-3.5 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                  </svg>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
     </div>

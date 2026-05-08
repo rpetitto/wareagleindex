@@ -1074,14 +1074,15 @@ app.get("/api/admin/users/:userId/profile", async (c) => {
   }));
 
   // Survey stats for the student
-  const [pendingRow, answeredRow, flaggedRow] = await Promise.all([
+  const [pendingWindows, answeredRow, flaggedRow] = await Promise.all([
     db.prepare(
-      `SELECT COUNT(DISTINCT sw.id) as cnt FROM survey_windows sw
+      `SELECT sw.id, sw.name, sw.opens_at, sw.closes_at FROM survey_windows sw
        WHERE datetime(sw.opens_at) <= datetime('now')
          AND datetime(sw.closes_at) >= datetime('now')
          AND NOT EXISTS (SELECT 1 FROM engagement_responses WHERE student_id = ?1 AND survey_window_id = sw.id)
-         AND NOT EXISTS (SELECT 1 FROM mattering_responses WHERE student_id = ?1 AND survey_window_id = sw.id)`
-    ).bind(userId).first<{ cnt: number }>(),
+         AND NOT EXISTS (SELECT 1 FROM mattering_responses WHERE student_id = ?1 AND survey_window_id = sw.id)
+       ORDER BY sw.opens_at DESC`
+    ).bind(userId).all<{ id: string; name: string; opens_at: string; closes_at: string }>(),
     db.prepare(
       `SELECT COUNT(DISTINCT window_id) as cnt FROM (
          SELECT survey_window_id AS window_id FROM engagement_responses WHERE student_id = ?1
@@ -1096,9 +1097,10 @@ app.get("/api/admin/users/:userId/profile", async (c) => {
   ]);
 
   const stats = {
-    pending: pendingRow?.cnt ?? 0,
+    pending: pendingWindows.results?.length ?? 0,
     answered: answeredRow?.cnt ?? 0,
     flagged: flaggedRow?.cnt ?? 0,
+    pendingWindows: pendingWindows.results ?? [],
   };
 
   return c.json({ profile, teaches: [], classes, stats });

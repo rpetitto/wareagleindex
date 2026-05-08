@@ -60,14 +60,8 @@ export default function StudentDashboard() {
       .catch(() => setLoading(false));
   }, []);
 
-  const totalPending = groups.reduce(
-    (sum, g) => sum + g.classes.filter((c) => !c.completed).length,
-    0
-  );
-  const totalCompleted = groups.reduce(
-    (sum, g) => sum + g.classes.filter((c) => c.completed).length,
-    0
-  );
+  const totalPending = groups.filter((g) => g.classes.some((c) => !c.completed)).length;
+  const totalCompleted = groups.filter((g) => g.classes.length > 0 && g.classes.every((c) => c.completed)).length;
 
   return (
     <div className="min-h-screen bg-warm">
@@ -161,21 +155,11 @@ export default function StudentDashboard() {
                       </svg>
                     </Link>
                   ) : (
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5 text-green-600 text-sm font-medium">
-                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                        All done
-                      </div>
-                      {done.length > 0 && done[0] && (
-                        <Link
-                          to={`/student/survey/${group.window.id}/${done[0].id}/view`}
-                          className="text-xs text-crimson font-medium hover:text-crimson-dark transition-colors"
-                        >
-                          View
-                        </Link>
-                      )}
+                    <div className="flex items-center gap-1.5 text-green-600 text-sm font-medium">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      All done
                     </div>
                   )}
                 </div>
