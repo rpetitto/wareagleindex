@@ -1447,6 +1447,8 @@ interface AdminClass {
   end_date: string | null;
   student_count: number;
   teacher_count: number;
+  primary_teacher_name: string | null;
+  teacher_picture: string | null;
   sy_ei: { avg_c: number | null; avg_l: number | null; cnt: number } | null;
 }
 
@@ -1489,6 +1491,14 @@ function AdminClassesPage() {
             key={cls.id}
             className={`flex items-center gap-3 px-4 py-3 ${i < filtered.length - 1 ? "border-b border-gray-50" : ""}`}
           >
+            {/* Teacher avatar */}
+            {cls.teacher_picture ? (
+              <img src={cls.teacher_picture} alt={cls.primary_teacher_name ?? ""} className="w-8 h-8 rounded-full object-cover object-top shrink-0" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-400 shrink-0">
+                {cls.primary_teacher_name?.[0] ?? "?"}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <button
                 onClick={() => setSelectedClassId(cls.id)}
@@ -1496,9 +1506,10 @@ function AdminClassesPage() {
               >
                 {cls.name}
               </button>
-              <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+              <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
                 {cls.veracross_id && <span>VC #{cls.veracross_id}</span>}
                 {cls.grade_level && <span>· Grade {cls.grade_level}</span>}
+                {cls.primary_teacher_name && <span>· {cls.primary_teacher_name}</span>}
                 {cls.sy_ei?.cnt ? (
                   <span className="text-gray-400">
                     · {cls.sy_ei.cnt} response{cls.sy_ei.cnt !== 1 ? "s" : ""} this year
@@ -1509,7 +1520,6 @@ function AdminClassesPage() {
             </div>
             <div className="text-xs text-gray-500 shrink-0 flex items-center gap-3">
               <span>{cls.student_count} students</span>
-              <span>{cls.teacher_count} teachers</span>
             </div>
           </div>
         ))}

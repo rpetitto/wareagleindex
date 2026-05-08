@@ -1001,19 +1001,24 @@ app.get("/api/admin/classes", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
+  const syStart = syStartDate();
   const rows = await db
     .prepare(
       `SELECT c.id, c.name, c.subject, c.grade_level, c.school_year, c.term, c.veracross_id, c.begin_date, c.end_date,
+              c.primary_teacher_name,
+              u.picture as teacher_picture,
               COUNT(DISTINCT e.student_id) as student_count,
               COUNT(DISTINCT tc.teacher_id) as teacher_count
        FROM classes c
        LEFT JOIN enrollments e ON e.class_id = c.id
        LEFT JOIN teacher_classes tc ON tc.class_id = c.id
+       LEFT JOIN users u ON u.id = tc.teacher_id AND u.role IN ('teacher','admin')
+       WHERE c.end_date IS NULL OR c.end_date >= ?1
        GROUP BY c.id ORDER BY c.name LIMIT 5000`
     )
+    .bind(syStart)
     .all();
 
-  const syStart = syStartDate();
   const eiStats = await db
     .prepare(
       `SELECT er.class_id, AVG(er.challenge) as avg_c, AVG(er.love) as avg_l, COUNT(*) as cnt
