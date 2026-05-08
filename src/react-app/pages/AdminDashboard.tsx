@@ -1741,6 +1741,167 @@ function AdminClassDetailPage() {
   return <AdminClassDetailContent classId={classId!} />;
 }
 
+// ─── Flagged ─────────────────────────────────────────────────────────────────
+
+interface FlaggedResponse {
+  id: string;
+  student_id: string;
+  student_name: string | null;
+  student_picture: string | null;
+  class_id: string;
+  class_name: string | null;
+  teacher_name: string | null;
+  challenge: number;
+  love: number;
+  submitted_at: string;
+  survey_window_id: string;
+  window_name: string;
+  zone: "anxiety" | "boredom";
+}
+
+function MiniDot({ challenge, love }: { challenge: number; love: number }) {
+  const SIZE = 80;
+  const PAD = 8;
+  const PLOT = SIZE - PAD * 2;
+  const x = PAD + ((challenge - 1) / 9) * PLOT;
+  const y = PAD + ((10 - love) / 9) * PLOT;
+  const zone = challenge > 5 && love <= 5 ? "anxiety" : challenge <= 5 && love <= 5 ? "boredom" : challenge > 5 ? "flow" : "comfort";
+  const quadColors: Record<string, string> = {
+    flow: "rgba(34,197,94,0.15)", comfort: "rgba(234,179,8,0.15)",
+    anxiety: "rgba(239,68,68,0.15)", boredom: "rgba(156,163,175,0.15)",
+  };
+  return (
+    <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE} className="shrink-0">
+      <rect x={PAD} y={PAD} width={PLOT / 2} height={PLOT / 2} fill={quadColors.comfort} />
+      <rect x={PAD + PLOT / 2} y={PAD} width={PLOT / 2} height={PLOT / 2} fill={quadColors.flow} />
+      <rect x={PAD} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill={quadColors.boredom} />
+      <rect x={PAD + PLOT / 2} y={PAD + PLOT / 2} width={PLOT / 2} height={PLOT / 2} fill={quadColors.anxiety} />
+      <rect x={PAD} y={PAD} width={PLOT} height={PLOT} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+      <line x1={PAD + PLOT / 2} y1={PAD} x2={PAD + PLOT / 2} y2={PAD + PLOT} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      <line x1={PAD} y1={PAD + PLOT / 2} x2={PAD + PLOT} y2={PAD + PLOT / 2} stroke="#e5e7eb" strokeWidth="0.5" strokeDasharray="2,2" />
+      <circle cx={x} cy={y} r="5" fill="#8B0000" stroke="white" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function FlaggedPage() {
+  const [windows, setWindows] = useState<Array<{ id: string; name: string; opens_at: string }>>([]);
+  const [windowId, setWindowId] = useState<string>("all");
+  const [rows, setRows] = useState<FlaggedResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/admin/surveys")
+      .then((r) => r.json())
+      .then((d: Array<{ id: string; name: string; opens_at: string; type: string }>) => {
+        const ei = d.filter((w) => w.type === "engagement_index");
+        setWindows(ei);
+        if (ei.length > 0) setWindowId(ei[0].id);
+      });
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    const url = windowId === "all" ? "/api/admin/flagged" : `/api/admin/flagged?windowId=${windowId}`;
+    fetch(url)
+      .then((r) => r.json())
+      .then((d) => { setRows(d as FlaggedResponse[]); setLoading(false); });
+  }, [windowId]);
+
+  // Group by student
+  const byStudent = useMemo(() => {
+    const map = new Map<string, { name: string | null; picture: string | null; responses: FlaggedResponse[] }>();
+    for (const r of rows) {
+      if (!map.has(r.student_id)) map.set(r.student_id, { name: r.student_name, picture: r.student_picture, responses: [] });
+      map.get(r.student_id)!.responses.push(r);
+    }
+    return Array.from(map.entries()).sort((a, b) => (a[1].name ?? "").localeCompare(b[1].name ?? ""));
+  }, [rows]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Flagged Responses</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Students with anxiety or boredom zone responses</p>
+        </div>
+        <select
+          value={windowId}
+          onChange={(e) => setWindowId(e.target.value)}
+          className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white shadow-sm"
+        >
+          <option value="all">All windows</option>
+          {windows.map((w) => (
+            <option key={w.id} value={w.id}>{w.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="text-center text-gray-400 py-12">Loading…</div>
+      ) : byStudent.length === 0 ? (
+        <div className="text-center text-gray-400 py-12">No flagged responses found.</div>
+      ) : (
+        <div className="space-y-4">
+          {byStudent.map(([studentId, { name, picture, responses }]) => {
+            const anxietyCount = responses.filter((r) => r.zone === "anxiety").length;
+            const boredomCount = responses.filter((r) => r.zone === "boredom").length;
+            const dominant = anxietyCount >= boredomCount ? "anxiety" : "boredom";
+            return (
+              <div key={studentId} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                {/* Student header */}
+                <div className={`flex items-center gap-3 px-4 py-3 border-b ${dominant === "anxiety" ? "border-red-100 bg-red-50" : "border-gray-100 bg-gray-50"}`}>
+                  {picture ? (
+                    <img src={picture} className="w-8 h-8 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-crimson text-white flex items-center justify-center text-xs font-bold shrink-0">
+                      {name?.charAt(0) ?? "?"}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <span className="font-semibold text-gray-900 text-sm">{name ?? "Unknown"}</span>
+                  </div>
+                  <div className="flex gap-2 text-xs">
+                    {anxietyCount > 0 && (
+                      <span className="bg-red-100 text-red-700 font-medium px-2 py-0.5 rounded-full">
+                        {anxietyCount} anxiety
+                      </span>
+                    )}
+                    {boredomCount > 0 && (
+                      <span className="bg-gray-200 text-gray-600 font-medium px-2 py-0.5 rounded-full">
+                        {boredomCount} boredom
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* Response rows */}
+                <div className="divide-y divide-gray-50">
+                  {responses.map((r) => (
+                    <div key={r.id} className="flex items-center gap-4 px-4 py-3">
+                      <MiniDot challenge={r.challenge} love={r.love} />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm text-gray-900 truncate">{r.class_name ?? "Unknown class"}</div>
+                        {r.teacher_name && <div className="text-xs text-gray-500">{r.teacher_name}</div>}
+                        <div className="text-xs text-gray-400 mt-0.5">{r.window_name}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className={`text-xs font-semibold px-2 py-1 rounded-full ${r.zone === "anxiety" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"}`}>
+                          {r.zone}
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">C:{r.challenge} L:{r.love}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -1749,6 +1910,7 @@ export default function AdminDashboard() {
   const tabs = [
     { to: "/admin", label: "Overview", exact: true },
     { to: "/admin/surveys", label: "Surveys" },
+    { to: "/admin/flagged", label: "Flagged" },
     { to: "/admin/users", label: "Users" },
     { to: "/admin/classes", label: "Classes" },
     { to: "/admin/sync", label: "Veracross Sync" },
@@ -1785,6 +1947,7 @@ export default function AdminDashboard() {
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/surveys" element={<SurveysPage />} />
+          <Route path="/flagged" element={<FlaggedPage />} />
           <Route path="/users" element={<UsersPage />} />
           <Route path="/users/:userId" element={<UserProfilePage />} />
           <Route path="/classes" element={<AdminClassesPage />} />

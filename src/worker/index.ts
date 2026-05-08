@@ -649,6 +649,54 @@ app.get("/api/admin/overview/concerns", async (c) => {
   return c.json(rows.results);
 });
 
+app.get("/api/admin/flagged", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const windowId = c.req.query("windowId");
+
+  // Flagged = response in anxiety zone (challenge > 5 AND love <= 5)
+  //        or boredom zone (challenge <= 5 AND love <= 5)
+  // i.e. love <= 5 for any challenge value
+  const windowFilter = windowId ? `AND er.survey_window_id = '${windowId}'` : "";
+
+  const rows = await db
+    .prepare(
+      `SELECT
+         er.id,
+         er.student_id,
+         COALESCE(er.student_name, u.name) AS student_name,
+         u.picture AS student_picture,
+         er.class_id,
+         COALESCE(er.class_name, c.name)   AS class_name,
+         COALESCE(er.teacher_name, c.primary_teacher_name) AS teacher_name,
+         er.challenge,
+         er.love,
+         er.submitted_at,
+         er.survey_window_id,
+         sw.name AS window_name,
+         CASE
+           WHEN er.challenge > 5 AND er.love <= 5 THEN 'anxiety'
+           ELSE 'boredom'
+         END AS zone
+       FROM engagement_responses er
+       JOIN survey_windows sw ON sw.id = er.survey_window_id
+       JOIN users u ON u.id = er.student_id
+       LEFT JOIN classes c ON c.id = er.class_id
+       WHERE er.love <= 5
+         ${windowFilter}
+       ORDER BY u.name, er.love ASC, er.submitted_at DESC`
+    )
+    .all<{
+      id: string; student_id: string; student_name: string | null; student_picture: string | null;
+      class_id: string; class_name: string | null; teacher_name: string | null;
+      challenge: number; love: number; submitted_at: string;
+      survey_window_id: string; window_name: string; zone: string;
+    }>();
+
+  return c.json(rows.results);
+});
+
 app.get("/api/admin/surveys", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
