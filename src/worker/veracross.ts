@@ -226,7 +226,7 @@ workflow("veracross-sync", {
              name = excluded.name,
              veracross_id = excluded.veracross_id,
              role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'teacher' END,
-             picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
+             picture = COALESCE(excluded.picture, picture),
              updated_at = datetime('now')`
         ).bind(crypto.randomUUID(), `vc_teacher_${vcId}`, email, name, vcId, photo),
       ];
@@ -261,7 +261,7 @@ workflow("veracross-sync", {
            ON CONFLICT(email) DO UPDATE SET
              name = excluded.name,
              veracross_id = excluded.veracross_id,
-             picture = COALESCE(CASE WHEN picture LIKE '%google%' OR picture LIKE '%googleapis%' THEN picture ELSE excluded.picture END, picture),
+             picture = COALESCE(excluded.picture, picture),
              updated_at = datetime('now')
            WHERE role != 'admin'`
         ).bind(crypto.randomUUID(), `vc_${vcId}`, email, name, vcId, photo),

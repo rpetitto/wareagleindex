@@ -52,11 +52,13 @@ app.get("/api/auth/callback", async (c) => {
         .run();
       user = { id: newId, role };
     } else {
-      // Update google_id/name/picture; promote to admin if email matches
+      // Update google_id/name; promote to admin if email matches.
+      // Do NOT overwrite picture — Veracross photo (synced) takes precedence.
+      // Only set picture if missing.
       const newRole = isAdminEmail ? "admin" : user.role;
       await db
         .prepare(
-          `UPDATE users SET google_id = ?1, name = ?2, picture = ?3, role = ?4, updated_at = datetime('now')
+          `UPDATE users SET google_id = ?1, name = ?2, picture = COALESCE(picture, ?3), role = ?4, updated_at = datetime('now')
            WHERE id = ?5`
         )
         .bind(googleUser.sub, googleUser.name, googleUser.picture, newRole, user.id)
@@ -660,32 +662,41 @@ app.get("/api/admin/flagged", async (c) => {
   // i.e. love <= 5 for any challenge value
   const windowFilter = windowId ? `AND er.survey_window_id = '${windowId}'` : "";
 
+  // Flagged = response with love <= 2 (very bored or very anxious).
+  // Only include students who have 4+ such responses within the scope.
   const rows = await db
     .prepare(
-      `SELECT
-         er.id,
-         er.student_id,
-         COALESCE(er.student_name, u.name) AS student_name,
-         u.picture AS student_picture,
-         er.class_id,
-         COALESCE(er.class_name, c.name)   AS class_name,
-         COALESCE(er.teacher_name, c.primary_teacher_name) AS teacher_name,
-         er.challenge,
-         er.love,
-         er.submitted_at,
-         er.survey_window_id,
-         sw.name AS window_name,
-         CASE
-           WHEN er.challenge > 5 AND er.love <= 5 THEN 'anxiety'
-           ELSE 'boredom'
-         END AS zone
-       FROM engagement_responses er
-       JOIN survey_windows sw ON sw.id = er.survey_window_id
-       JOIN users u ON u.id = er.student_id
-       LEFT JOIN classes c ON c.id = er.class_id
-       WHERE er.love <= 5
-         ${windowFilter}
-       ORDER BY u.name, er.love ASC, er.submitted_at DESC`
+      `WITH flagged AS (
+         SELECT er.*, u.name AS u_name, u.picture AS u_picture,
+                c.name AS c_name, c.primary_teacher_name AS c_teacher,
+                sw.name AS sw_name
+         FROM engagement_responses er
+         JOIN survey_windows sw ON sw.id = er.survey_window_id
+         JOIN users u ON u.id = er.student_id
+         LEFT JOIN classes c ON c.id = er.class_id
+         WHERE er.love <= 2
+           ${windowFilter}
+       ),
+       qualifying AS (
+         SELECT student_id FROM flagged GROUP BY student_id HAVING COUNT(*) >= 4
+       )
+       SELECT
+         f.id,
+         f.student_id,
+         COALESCE(f.student_name, f.u_name) AS student_name,
+         f.u_picture AS student_picture,
+         f.class_id,
+         COALESCE(f.class_name, f.c_name)   AS class_name,
+         COALESCE(f.teacher_name, f.c_teacher) AS teacher_name,
+         f.challenge,
+         f.love,
+         f.submitted_at,
+         f.survey_window_id,
+         f.sw_name AS window_name,
+         CASE WHEN f.challenge > 5 THEN 'anxiety' ELSE 'boredom' END AS zone
+       FROM flagged f
+       JOIN qualifying q ON q.student_id = f.student_id
+       ORDER BY f.u_name, f.love ASC, f.submitted_at DESC`
     )
     .all<{
       id: string; student_id: string; student_name: string | null; student_picture: string | null;

@@ -1823,7 +1823,7 @@ function FlaggedPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Flagged Responses</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Students with anxiety or boredom zone responses</p>
+          <p className="text-sm text-gray-500 mt-0.5">Students with very low love-of-learning (≤2) in 4+ classes</p>
         </div>
         <select
           value={windowId}
