@@ -346,7 +346,7 @@ workflow("veracross-sync", {
       (e) =>
         e.currently_enrolled &&
         e.exclude_from_transcript !== true &&
-        String(e.class_status).toLowerCase() !== "future" &&
+        Number(e.class_status) !== 2 && /* 2 = future */
         !isWithdrawn(e.date_withdrawn) &&
         !isNonAcademic(e.class_description ?? "") &&
         (e.course_type == null || ALLOWED_COURSE_TYPES.has(e.course_type))
