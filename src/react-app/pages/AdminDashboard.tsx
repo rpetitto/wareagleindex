@@ -1374,6 +1374,7 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
   const [tileWindowId, setTileWindowId] = useState<string | null>(null);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [reportUrl, setReportUrl] = useState<string | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -1385,6 +1386,7 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
     setTileWindowId(null);
     setGeneratingReport(false);
     setReportUrl(null);
+    setReportError(null);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
       .then((d) => {
@@ -1625,11 +1627,15 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
               <button
                 onClick={async () => {
                   setGeneratingReport(true);
+                  setReportError(null);
                   try {
                     const r = await fetch(`/api/admin/users/${userId}/engagement-report`, { method: "POST" });
                     const d = await r.json() as { doc_url?: string; pdf_url?: string; error?: string };
                     if (d.doc_url) setReportUrl(d.doc_url);
                     else if (d.pdf_url) setReportUrl(d.pdf_url);
+                    else setReportError(d.error ?? "Unknown error");
+                  } catch (e) {
+                    setReportError(String(e));
                   } finally {
                     setGeneratingReport(false);
                   }
@@ -1656,6 +1662,10 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
               </button>
             )}
           </div>
+
+          {reportError && (
+            <p className="text-xs text-red-600 mt-1">{reportError}</p>
+          )}
 
           {/* Big number tiles — clickable */}
           {(() => {

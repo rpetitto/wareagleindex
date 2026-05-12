@@ -1107,6 +1107,7 @@ app.get("/api/admin/users/:userId/profile", async (c) => {
 });
 
 app.post("/api/admin/users/:userId/engagement-report", async (c) => {
+  try {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
 
@@ -1183,6 +1184,10 @@ app.post("/api/admin/users/:userId/engagement-report", async (c) => {
 
   const doc = await resp.json() as { id: string; doc_url?: string; pdf_url?: string };
   return c.json({ id: doc.id, doc_url: doc.doc_url, pdf_url: doc.pdf_url });
+  } catch (e) {
+    console.error("engagement-report error:", e instanceof Error ? e.message : String(e));
+    return c.json({ error: String(e) }, 500);
+  }
 });
 
 app.get("/api/admin/classes", async (c) => {
