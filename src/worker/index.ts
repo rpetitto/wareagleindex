@@ -10,6 +10,7 @@ import {
   getAdminEmails,
 } from "./auth";
 import { startSyncWorkflow, debugVeracrossEndpoint, type SyncPhase } from "./veracross";
+import { buildEngagementReportHtml } from "./engagement-report";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
@@ -1151,7 +1152,6 @@ app.post("/api/admin/users/:userId/engagement-report", async (c) => {
   const schoolYear = `${syYear}–${String(syYear + 1).slice(2)}`;
   const generatedDate = now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 
-  const { buildEngagementReportHtml } = await import("./engagement-report");
   const html = buildEngagementReportHtml({
     studentName: profile.name,
     studentEmail: profile.email,
