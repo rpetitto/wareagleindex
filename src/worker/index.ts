@@ -1,4 +1,4 @@
-import { app, db } from "flingit";
+import { app, db, secrets } from "flingit";
 import "./migrations";
 import {
   getSessionUser,
@@ -1103,6 +1103,86 @@ app.get("/api/admin/users/:userId/profile", async (c) => {
   };
 
   return c.json({ profile, teaches: [], classes, stats });
+});
+
+app.post("/api/admin/users/:userId/engagement-report", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { userId } = c.req.param();
+
+  const profile = await db
+    .prepare(`SELECT id, name, email, veracross_id, role FROM users WHERE id = ?1`)
+    .bind(userId)
+    .first<{ id: string; name: string; email: string; veracross_id: string | null; role: string }>();
+  if (!profile || profile.role !== "student") return c.json({ error: "Student not found" }, 404);
+
+  // Fetch all EI responses
+  const eiRows = await db.prepare(
+    `SELECT er.class_id, er.challenge, er.love,
+            c.name as class_name, c.primary_teacher_name as teacher_name,
+            sw.id as window_id, sw.name as window_name, sw.opens_at
+     FROM engagement_responses er
+     JOIN survey_windows sw ON sw.id = er.survey_window_id
+     JOIN classes c ON c.id = er.class_id
+     WHERE er.student_id = ?1 ORDER BY sw.opens_at DESC`
+  ).bind(userId).all<{ class_id: string; challenge: number; love: number; class_name: string; teacher_name: string | null; window_id: string; window_name: string; opens_at: string }>();
+
+  const answeredRow = await db.prepare(
+    `SELECT COUNT(DISTINCT window_id) as cnt FROM (
+       SELECT survey_window_id AS window_id FROM engagement_responses WHERE student_id = ?1
+       UNION SELECT survey_window_id FROM mattering_responses WHERE student_id = ?1
+     )`
+  ).bind(userId).first<{ cnt: number }>();
+
+  // Group by window
+  const windowMap = new Map<string, { window_id: string; window_name: string; opens_at: string; ratings: typeof eiRows.results }>();
+  for (const r of eiRows.results ?? []) {
+    if (!windowMap.has(r.window_id)) {
+      windowMap.set(r.window_id, { window_id: r.window_id, window_name: r.window_name, opens_at: r.opens_at, ratings: [] });
+    }
+    windowMap.get(r.window_id)!.ratings.push(r);
+  }
+  const eiWindows = Array.from(windowMap.values()).sort((a, b) => b.opens_at.localeCompare(a.opens_at));
+
+  // School year label
+  const now = new Date();
+  const syYear = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  const schoolYear = `${syYear}–${String(syYear + 1).slice(2)}`;
+  const generatedDate = now.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+
+  const { buildEngagementReportHtml } = await import("./engagement-report");
+  const html = buildEngagementReportHtml({
+    studentName: profile.name,
+    studentEmail: profile.email,
+    generatedDate,
+    schoolYear,
+    eiWindows,
+    totalAnswered: answeredRow?.cnt ?? 0,
+  });
+
+  // Create ZipZign readable document
+  const zipzignKey = secrets.get("ZIPZIGN_API_KEY");
+  const resp = await fetch("https://zipzign.com/api/documents", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${zipzignKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "readable",
+      html,
+      layout: { size: "Letter", orientation: "portrait", margin_top: 0, margin_bottom: 0, margin_left: 0, margin_right: 0 },
+    }),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    return c.json({ error: `ZipZign error: ${err}` }, 500);
+  }
+
+  const doc = await resp.json() as { id: string; doc_url?: string; pdf_url?: string };
+  return c.json({ id: doc.id, doc_url: doc.doc_url, pdf_url: doc.pdf_url });
 });
 
 app.get("/api/admin/classes", async (c) => {

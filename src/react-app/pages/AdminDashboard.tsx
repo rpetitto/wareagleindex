@@ -1372,6 +1372,8 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
   const [showBreakdown, setShowBreakdown] = useState(false);
   const [activeTile, setActiveTile] = useState<"pending" | "answered" | "flagged" | null>(null);
   const [tileWindowId, setTileWindowId] = useState<string | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportUrl, setReportUrl] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -1381,6 +1383,8 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
     setShowBreakdown(false);
     setActiveTile(null);
     setTileWindowId(null);
+    setGeneratingReport(false);
+    setReportUrl(null);
     fetch(`/api/admin/users/${userId}/profile`)
       .then((r) => r.json())
       .then((d) => {
@@ -1603,6 +1607,56 @@ function UserProfileContent({ userId, onClose }: { userId: string; onClose?: () 
       {/* Student view */}
       {!isTeacher && (
         <>
+          {/* Generate Report button */}
+          <div className="mb-4 flex items-center gap-3">
+            {reportUrl ? (
+              <a
+                href={reportUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 bg-crimson text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-crimson-dark transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                View Report
+              </a>
+            ) : (
+              <button
+                onClick={async () => {
+                  setGeneratingReport(true);
+                  try {
+                    const r = await fetch(`/api/admin/users/${userId}/engagement-report`, { method: "POST" });
+                    const d = await r.json() as { doc_url?: string; pdf_url?: string; error?: string };
+                    if (d.doc_url) setReportUrl(d.doc_url);
+                    else if (d.pdf_url) setReportUrl(d.pdf_url);
+                  } finally {
+                    setGeneratingReport(false);
+                  }
+                }}
+                disabled={generatingReport}
+                className="flex items-center gap-2 bg-white border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {generatingReport ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin text-crimson" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 text-crimson" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Generate Report
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+
           {/* Big number tiles — clickable */}
           {(() => {
             const tiles = [
