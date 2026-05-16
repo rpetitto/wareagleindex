@@ -1162,6 +1162,8 @@ app.post("/api/admin/users/:userId/engagement-report", async (c) => {
     totalAnswered: answeredRow?.cnt ?? 0,
   });
 
+  console.log("engagement-report html length:", html.length);
+
   // Create ZipZign readable document
   const zipzignKey = secrets.get("ZIPZIGN_API_KEY");
   const resp = await fetch("https://zipzign.com/api/documents", {
@@ -1173,7 +1175,6 @@ app.post("/api/admin/users/:userId/engagement-report", async (c) => {
     body: JSON.stringify({
       type: "readable",
       html,
-      layout: { size: "Letter", orientation: "portrait", margin_top: 0, margin_bottom: 0, margin_left: 0, margin_right: 0 },
     }),
   });
 
