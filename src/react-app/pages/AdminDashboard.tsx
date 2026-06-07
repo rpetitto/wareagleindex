@@ -4,6 +4,7 @@ import NavBar from "../components/NavBar";
 import QuadrantScatter from "../components/QuadrantScatter";
 import SlideOver from "../components/SlideOver";
 import TeacherOverviewCard, { type TeacherOverviewData } from "../components/TeacherOverviewCard";
+import AdminDataGrid from "./AdminDataGrid";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 
@@ -2345,6 +2346,7 @@ export default function AdminDashboard() {
     { to: "/admin/flagged", label: "Flagged" },
     { to: "/admin/users", label: "Users" },
     { to: "/admin/classes", label: "Classes" },
+    { to: "/admin/data", label: "Import Data" },
     { to: "/admin/sync", label: "Veracross Sync" },
   ];
 
@@ -2384,6 +2386,7 @@ export default function AdminDashboard() {
           <Route path="/users/:userId" element={<UserProfilePage />} />
           <Route path="/classes" element={<AdminClassesPage />} />
           <Route path="/classes/:classId" element={<AdminClassDetailPage />} />
+          <Route path="/data" element={<AdminDataGrid />} />
           <Route path="/sync" element={<SyncPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>

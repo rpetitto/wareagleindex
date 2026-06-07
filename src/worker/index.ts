@@ -1729,6 +1729,96 @@ app.post("/api/admin/sync/cancel", async (c) => {
   return c.json({ ok: true });
 });
 
+// ─── Data Grid (admin-only raw import data viewer) ─────────────────────────────
+
+const DATA_GRID_ROW_CAP = 50000;
+
+const DATA_GRID_TABLES: Record<string, { label: string; columns: string[]; sql: string; countSql: string }> = {
+  students: {
+    label: "Students",
+    columns: ["name", "email", "veracross_id", "role", "has_photo", "created_at"],
+    sql: `SELECT name, email, veracross_id, role,
+            CASE WHEN picture IS NOT NULL THEN 'yes' ELSE 'no' END AS has_photo, created_at
+          FROM users WHERE role = 'student' ORDER BY name LIMIT ${DATA_GRID_ROW_CAP}`,
+    countSql: `SELECT COUNT(*) AS cnt FROM users WHERE role = 'student'`,
+  },
+  teachers: {
+    label: "Teachers & Admins",
+    columns: ["name", "email", "veracross_id", "role", "has_photo", "created_at"],
+    sql: `SELECT name, email, veracross_id, role,
+            CASE WHEN picture IS NOT NULL THEN 'yes' ELSE 'no' END AS has_photo, created_at
+          FROM users WHERE role IN ('teacher','admin') ORDER BY name LIMIT ${DATA_GRID_ROW_CAP}`,
+    countSql: `SELECT COUNT(*) AS cnt FROM users WHERE role IN ('teacher','admin')`,
+  },
+  classes: {
+    label: "Classes",
+    columns: ["veracross_id", "name", "subject", "grade_level", "school_year", "term", "primary_teacher_name", "begin_date", "end_date"],
+    sql: `SELECT veracross_id, name, subject, grade_level, school_year, term, primary_teacher_name, begin_date, end_date
+          FROM classes ORDER BY name LIMIT ${DATA_GRID_ROW_CAP}`,
+    countSql: `SELECT COUNT(*) AS cnt FROM classes`,
+  },
+  enrollments: {
+    label: "Enrollments",
+    columns: ["student_name", "student_vc_id", "class_name", "class_vc_id", "class_status", "last_synced_at"],
+    sql: `SELECT u.name AS student_name, u.veracross_id AS student_vc_id,
+            c.name AS class_name, c.veracross_id AS class_vc_id, e.class_status, e.last_synced_at
+          FROM enrollments e
+          LEFT JOIN users u ON u.id = e.student_id
+          LEFT JOIN classes c ON c.id = e.class_id
+          ORDER BY u.name LIMIT ${DATA_GRID_ROW_CAP}`,
+    countSql: `SELECT COUNT(*) AS cnt FROM enrollments`,
+  },
+  teacher_classes: {
+    label: "Teacher Assignments",
+    columns: ["teacher_name", "teacher_vc_id", "class_name", "class_vc_id", "last_synced_at"],
+    sql: `SELECT u.name AS teacher_name, u.veracross_id AS teacher_vc_id,
+            c.name AS class_name, c.veracross_id AS class_vc_id, tc.last_synced_at
+          FROM teacher_classes tc
+          LEFT JOIN users u ON u.id = tc.teacher_id
+          LEFT JOIN classes c ON c.id = tc.class_id
+          ORDER BY u.name LIMIT ${DATA_GRID_ROW_CAP}`,
+    countSql: `SELECT COUNT(*) AS cnt FROM teacher_classes`,
+  },
+};
+
+app.get("/api/admin/data-grid", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const tables = await Promise.all(
+    Object.entries(DATA_GRID_TABLES).map(async ([key, def]) => {
+      const row = await db.prepare(def.countSql).first<{ cnt: number }>();
+      return { key, label: def.label, count: row?.cnt ?? 0 };
+    })
+  );
+  return c.json({ tables });
+});
+
+app.get("/api/admin/data-grid/:table", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const { table } = c.req.param();
+  const def = DATA_GRID_TABLES[table];
+  if (!def) return c.json({ error: "Unknown table" }, 404);
+
+  const [rowsRes, countRow] = await Promise.all([
+    db.prepare(def.sql).all<Record<string, unknown>>(),
+    db.prepare(def.countSql).first<{ cnt: number }>(),
+  ]);
+
+  const total = countRow?.cnt ?? 0;
+  const rows = rowsRes.results ?? [];
+  return c.json({
+    key: table,
+    label: def.label,
+    columns: def.columns,
+    rows,
+    total,
+    truncated: total > rows.length,
+  });
+});
+
 app.get("/api/admin/sync/logs", async (c) => {
   const user = await getSessionUser(c);
   if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
