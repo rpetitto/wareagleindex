@@ -2399,13 +2399,13 @@ function PhotoImportPage() {
     return () => clearInterval(id);
   }, []);
 
-  async function runImport() {
+  async function runImport(limit?: number) {
     setError(null);
     setRunning(true);
     const res = await fetch("/api/admin/photo-import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ naming }),
+      body: JSON.stringify({ naming, limit }),
     }).catch(() => null);
     if (res && !res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -2488,7 +2488,7 @@ function PhotoImportPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={runImport}
+            onClick={() => runImport()}
             disabled={running || (config != null && !config.configured)}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
               running || (config != null && !config.configured)
@@ -2509,10 +2509,20 @@ function PhotoImportPage() {
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5 5 5M12 5v12" />
                 </svg>
-                Import Photos
+                Import All Photos
               </>
             )}
           </button>
+          {!running && (
+            <button
+              onClick={() => runImport(25)}
+              disabled={config != null && !config.configured}
+              title="Import the first 25 students only — useful for checking the folder and naming before a full run"
+              className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              Test run (25)
+            </button>
+          )}
           {running && (
             <button
               onClick={cancelImport}

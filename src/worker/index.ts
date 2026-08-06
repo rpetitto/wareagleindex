@@ -1770,19 +1770,21 @@ app.post("/api/admin/photo-import", async (c) => {
     .first<{ id: string }>();
   if (alreadyRunning) return c.json({ error: "A photo import is already running" }, 409);
 
-  const body = await c.req.json<{ naming?: PhotoNaming }>().catch(() => ({}));
+  const body = await c.req.json<{ naming?: PhotoNaming; limit?: number }>().catch(() => ({}));
   const naming: PhotoNaming =
     body.naming === "bare" || body.naming === "ext" ? body.naming : "auto";
+  const limit =
+    typeof body.limit === "number" && body.limit > 0 ? Math.floor(body.limit) : undefined;
 
   const logId = crypto.randomUUID();
   await db
-    .prepare(`INSERT INTO photo_import_logs (id, status, folder_id) VALUES (?1, 'running', ?2)`)
+    .prepare(`INSERT INTO photo_import_logs (id, status, folder_id) VALUES (?, 'running', ?)`)
     .bind(logId, status.folderId)
     .run();
 
   try {
-    const runId = await startPhotoImportWorkflow(logId, naming);
-    await db.prepare(`UPDATE photo_import_logs SET run_id=?1 WHERE id=?2`).bind(runId, logId).run();
+    const runId = await startPhotoImportWorkflow(logId, naming, limit);
+    await db.prepare(`UPDATE photo_import_logs SET run_id=? WHERE id=?`).bind(runId, logId).run();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markPhotoImportFailed(logId, message);

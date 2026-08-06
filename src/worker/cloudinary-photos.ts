@@ -10,11 +10,15 @@ import {
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-// The Cloudinary folder photos are written to. This is the folder's immutable
-// external_id (the `c-…` id that appears in the Media Library URL). It can be
-// overridden with a CLOUDINARY_FOLDER_ID secret, which may hold either another
-// external_id or a plain folder path like "students/photos".
-const DEFAULT_FOLDER_ID = "c-82e34e7827a47f1781db6dec700da2";
+// The Cloudinary folder photos are written to. Override with a
+// CLOUDINARY_FOLDER_ID secret, which may hold either a folder path like
+// "2025" / "Woodward/students", or a folder's immutable external_id.
+//
+// Note: `c-82e34e7827a47f1781db6dec700da2` is the product environment id for
+// the "robertpetitto" cloud (it identifies the account, not a folder) — the
+// GET /config response returns it as `id`. The folder holding the photos is
+// "2025", which already contains the previous import keyed by student id.
+const DEFAULT_FOLDER_ID = "2025";
 
 // Photos uploaded per workflow step. Each step should stay well under a minute.
 const BATCH_SIZE = 50;
@@ -330,6 +334,7 @@ async function vcList<T>(path: string, token: string, maxPages = 20): Promise<T[
   const school = secrets.get("VERACROSS_SCHOOL");
   const PAGE_SIZE = 1000;
   const all: T[] = [];
+  let complete = false;
   for (let page = 1; page <= maxPages; page++) {
     const res = await fetch(`https://api.veracross.com/${school}/v3/${path}`, {
       headers: {
@@ -342,7 +347,18 @@ async function vcList<T>(path: string, token: string, maxPages = 20): Promise<T[
     const json = (await res.json()) as { data?: T[] };
     const records = json.data ?? [];
     all.push(...records);
-    if (records.length < PAGE_SIZE) break;
+    if (records.length < PAGE_SIZE) {
+      complete = true;
+      break;
+    }
+  }
+  // Hitting the cap silently would look identical to "these students have no
+  // photo", so make the truncation loud instead.
+  if (!complete) {
+    throw new Error(
+      `Veracross /${path} exceeded the ${maxPages}-page cap (${all.length} rows) — raise maxPages, ` +
+        `otherwise photos would be silently missing.`
+    );
   }
   return all;
 }
@@ -412,7 +428,7 @@ workflow(
       const token = await getVCToken();
       const [students, photos] = await Promise.all([
         vcList<VCStudentLite>("students", token, 10),
-        vcList<VCPhotoLite>("person_photos", token, 20),
+        vcList<VCPhotoLite>("person_photos", token, 30),
       ]);
 
       const photoByPerson = new Map<number, string>();
@@ -430,6 +446,14 @@ workflow(
         });
       }
 
+      // "Skipped" means the student has no photo in Veracross — count it before
+      // a test run truncates the list, so the two never get conflated.
+      const withoutPhoto = students.length - jobs.length;
+
+      // A limited run (test run from the admin UI) touches only the first N.
+      const limit = (await ctx.get("limit")) as number | undefined;
+      if (limit && limit > 0) jobs.length = Math.min(jobs.length, limit);
+
       // Batches live in storage — the scratchpad is not for bulk data.
       const batchCount = Math.ceil(jobs.length / BATCH_SIZE);
       for (let i = 0; i < batchCount; i++) {
@@ -446,15 +470,15 @@ workflow(
       ctx.set("batchIndex", 0);
       ctx.set("uploaded", 0);
       ctx.set("failed", 0);
-      ctx.set("skipped", students.length - jobs.length);
+      ctx.set("skipped", withoutPhoto);
 
       await db
         .prepare(
           `UPDATE photo_import_logs
-             SET total=?1, skipped=?2, folder_path=?3, students=?4
-           WHERE id=?5`
+             SET total=?, skipped=?, folder_path=?, students=?
+           WHERE id=?`
         )
-        .bind(jobs.length, students.length - jobs.length, folderPath, students.length, logId)
+        .bind(jobs.length, withoutPhoto, folderPath, students.length, logId)
         .run();
 
       if (jobs.length === 0) return { step: "finalize" };
@@ -472,7 +496,7 @@ workflow(
 
       // Admin pressed Cancel — stop cleanly instead of grinding through the rest.
       const log = await db
-        .prepare(`SELECT status FROM photo_import_logs WHERE id=?1`)
+        .prepare(`SELECT status FROM photo_import_logs WHERE id=?`)
         .bind(logId)
         .first<{ status: string }>();
       if (!log || log.status !== "running") return { step: "cleanup" };
@@ -529,17 +553,17 @@ workflow(
 
       if (errors.length) {
         const row = await db
-          .prepare(`SELECT errors FROM photo_import_logs WHERE id=?1`)
+          .prepare(`SELECT errors FROM photo_import_logs WHERE id=?`)
           .bind(logId)
           .first<{ errors: string | null }>();
         const previous = row?.errors ? (JSON.parse(row.errors) as typeof errors) : [];
         await db
-          .prepare(`UPDATE photo_import_logs SET errors=?1 WHERE id=?2`)
+          .prepare(`UPDATE photo_import_logs SET errors=? WHERE id=?`)
           .bind(JSON.stringify([...previous, ...errors].slice(0, MAX_LOGGED_ERRORS)), logId)
           .run();
       }
       await db
-        .prepare(`UPDATE photo_import_logs SET uploaded=?1, failed=?2 WHERE id=?3`)
+        .prepare(`UPDATE photo_import_logs SET uploaded=?, failed=? WHERE id=?`)
         .bind(uploaded, failed, logId)
         .run();
 
@@ -565,8 +589,8 @@ workflow(
         .prepare(
           `UPDATE photo_import_logs
              SET status = CASE WHEN status='running' THEN 'ok' ELSE status END,
-                 duration_ms=?1
-           WHERE id=?2`
+                 duration_ms=?
+           WHERE id=?`
         )
         .bind(Date.now() - startTime, logId)
         .run();
@@ -577,15 +601,19 @@ workflow(
   { maxAttempts: 3, stepTimeoutMS: 180000 }
 );
 
-export async function startPhotoImportWorkflow(logId: string, naming: PhotoNaming): Promise<string> {
-  const run = await workflow.start("cloudinary-photo-import", { logId, naming });
+export async function startPhotoImportWorkflow(
+  logId: string,
+  naming: PhotoNaming,
+  limit?: number
+): Promise<string> {
+  const run = await workflow.start("cloudinary-photo-import", { logId, naming, limit: limit ?? null });
   return run.runId;
 }
 
 /** Marks the log row failed so the running workflow stops at its next step. */
 export async function markPhotoImportFailed(logId: string, message: string): Promise<void> {
   await db
-    .prepare(`UPDATE photo_import_logs SET status='error', error_message=?1 WHERE id=?2`)
+    .prepare(`UPDATE photo_import_logs SET status='error', error_message=? WHERE id=?`)
     .bind(message, logId)
     .run();
 }
