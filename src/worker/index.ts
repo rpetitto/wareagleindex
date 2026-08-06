@@ -10,6 +10,13 @@ import {
   getAdminEmails,
 } from "./auth";
 import { startSyncWorkflow, debugVeracrossEndpoint, type SyncPhase } from "./veracross";
+import {
+  startPhotoImportWorkflow,
+  markPhotoImportFailed,
+  describeTargetFolder,
+  cloudinaryConfigStatus,
+  type PhotoNaming,
+} from "./cloudinary-photos";
 import { buildEngagementReportHtml } from "./engagement-report";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -1727,6 +1734,87 @@ app.post("/api/admin/sync/cancel", async (c) => {
     .prepare(`UPDATE sync_logs SET status='error', error_message='Cancelled by admin' WHERE status='running'`)
     .run();
   return c.json({ ok: true });
+});
+
+// ─── Cloudinary photo import ──────────────────────────────────────────────────
+
+app.get("/api/admin/photo-import/config", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  const status = cloudinaryConfigStatus();
+  if (!status.configured) return c.json(status);
+  // Resolving the folder id also proves the credentials work.
+  const folder = await describeTargetFolder();
+  return c.json({ ...status, ...folder });
+});
+
+app.post("/api/admin/photo-import", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+
+  const status = cloudinaryConfigStatus();
+  if (!status.configured) {
+    return c.json({ error: `Missing Cloudinary secrets: ${status.missing.join(", ")}` }, 400);
+  }
+
+  // Expire stalled runs (nothing has updated them for 30 minutes).
+  await db
+    .prepare(
+      `UPDATE photo_import_logs SET status='error', error_message='Timed out'
+       WHERE status='running' AND ran_at < datetime('now', '-30 minutes')`
+    )
+    .run();
+
+  const alreadyRunning = await db
+    .prepare(`SELECT id FROM photo_import_logs WHERE status='running' LIMIT 1`)
+    .first<{ id: string }>();
+  if (alreadyRunning) return c.json({ error: "A photo import is already running" }, 409);
+
+  const body = await c.req.json<{ naming?: PhotoNaming }>().catch(() => ({}));
+  const naming: PhotoNaming =
+    body.naming === "bare" || body.naming === "ext" ? body.naming : "auto";
+
+  const logId = crypto.randomUUID();
+  await db
+    .prepare(`INSERT INTO photo_import_logs (id, status, folder_id) VALUES (?1, 'running', ?2)`)
+    .bind(logId, status.folderId)
+    .run();
+
+  try {
+    const runId = await startPhotoImportWorkflow(logId, naming);
+    await db.prepare(`UPDATE photo_import_logs SET run_id=?1 WHERE id=?2`).bind(runId, logId).run();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await markPhotoImportFailed(logId, message);
+    return c.json({ error: message }, 500);
+  }
+
+  return c.json({ ok: true, logId });
+});
+
+app.post("/api/admin/photo-import/cancel", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  await db
+    .prepare(
+      `UPDATE photo_import_logs SET status='error', error_message='Cancelled by admin'
+       WHERE status='running'`
+    )
+    .run();
+  return c.json({ ok: true });
+});
+
+app.get("/api/admin/photo-import/logs", async (c) => {
+  const user = await getSessionUser(c);
+  if (!user || user.role !== "admin") return c.json({ error: "Forbidden" }, 403);
+  const logs = await db
+    .prepare(
+      `SELECT id, ran_at, status, folder_id, folder_path, students, total, uploaded, skipped,
+              failed, errors, error_message, duration_ms
+       FROM photo_import_logs ORDER BY ran_at DESC LIMIT 20`
+    )
+    .all();
+  return c.json(logs.results ?? []);
 });
 
 // ─── Data Grid (admin-only raw import data viewer) ─────────────────────────────

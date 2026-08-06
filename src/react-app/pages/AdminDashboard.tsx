@@ -2335,6 +2335,283 @@ function FlaggedPage() {
   );
 }
 
+// ─── Cloudinary photo import ──────────────────────────────────────────────────
+
+interface PhotoImportLog {
+  id: string;
+  ran_at: string;
+  status: string;
+  folder_id: string | null;
+  folder_path: string | null;
+  students: number | null;
+  total: number | null;
+  uploaded: number | null;
+  skipped: number | null;
+  failed: number | null;
+  errors: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+}
+
+interface PhotoImportConfig {
+  configured: boolean;
+  missing: string[];
+  folderId: string;
+  folderPath?: string;
+  error?: string;
+}
+
+type Naming = "auto" | "bare" | "ext";
+
+const NAMING_OPTIONS: { key: Naming; label: string; hint: string }[] = [
+  { key: "auto", label: "Match folder", hint: "Use whatever naming the folder already uses" },
+  { key: "bare", label: "123456", hint: "public_id without extension (delivers as 123456.jpg)" },
+  { key: "ext", label: "123456.jpg", hint: "public_id includes the .jpg extension" },
+];
+
+function PhotoImportPage() {
+  const [config, setConfig] = useState<PhotoImportConfig | null>(null);
+  const [logs, setLogs] = useState<PhotoImportLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [naming, setNaming] = useState<Naming>("auto");
+  const [error, setError] = useState<string | null>(null);
+
+  function loadLogs() {
+    return fetch("/api/admin/photo-import/logs")
+      .then((r) => r.json())
+      .then((d) => {
+        const rows = d as PhotoImportLog[];
+        setLogs(rows);
+        setLoading(false);
+        setRunning(rows.some((r) => r.status === "running"));
+      })
+      .catch(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    fetch("/api/admin/photo-import/config")
+      .then((r) => r.json())
+      .then(setConfig)
+      .catch(() => {});
+    loadLogs();
+    const id = setInterval(loadLogs, 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function runImport() {
+    setError(null);
+    setRunning(true);
+    const res = await fetch("/api/admin/photo-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ naming }),
+    }).catch(() => null);
+    if (res && !res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(body.error ?? "Failed to start import");
+      setRunning(false);
+    }
+    loadLogs();
+  }
+
+  async function cancelImport() {
+    if (!confirm("Stop the running import? Photos already uploaded stay in Cloudinary.")) return;
+    await fetch("/api/admin/photo-import/cancel", { method: "POST" }).catch(() => {});
+    loadLogs();
+  }
+
+  function fmt(ms: number | null) {
+    if (ms == null) return "";
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h2 className="text-xl font-bold text-gray-900">Student Photos → Cloudinary</h2>
+        <p className="text-gray-500 text-sm mt-1">
+          Pulls every current student's Veracross photo and uploads it as{" "}
+          <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">ID#.jpg</code>, overwriting the
+          existing file in the target folder.
+        </p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 mb-6">
+        <div className="mb-4">
+          <div className="text-sm font-semibold text-gray-700 mb-1">Destination folder</div>
+          {config == null ? (
+            <div className="text-sm text-gray-400">Checking…</div>
+          ) : !config.configured ? (
+            <div className="text-sm text-red-600">
+              Missing secrets: {config.missing.join(", ")}. Set them with{" "}
+              <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">fling secret set</code>.
+            </div>
+          ) : (
+            <div className="text-sm text-gray-600">
+              <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">
+                {config.folderPath ?? config.folderId}
+              </span>
+              {config.error && <span className="text-red-600 ml-2">{config.error}</span>}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-5">
+          <div className="text-sm font-semibold text-gray-700 mb-2">File naming</div>
+          <div className="grid sm:grid-cols-3 gap-2">
+            {NAMING_OPTIONS.map((o) => {
+              const active = naming === o.key;
+              return (
+                <label
+                  key={o.key}
+                  title={o.hint}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                    active ? "bg-crimson/5 border-crimson/30" : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    checked={active}
+                    onChange={() => setNaming(o.key)}
+                    disabled={running}
+                    className="w-4 h-4 accent-crimson"
+                  />
+                  <span className={`text-sm font-medium ${active ? "text-gray-900" : "text-gray-600"}`}>
+                    {o.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={runImport}
+            disabled={running || (config != null && !config.configured)}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm transition-all ${
+              running || (config != null && !config.configured)
+                ? "bg-gray-300 cursor-not-allowed"
+                : "bg-crimson hover:bg-crimson-dark shadow-sm"
+            }`}
+          >
+            {running ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Importing…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5 5 5M12 5v12" />
+                </svg>
+                Import Photos
+              </>
+            )}
+          </button>
+          {running && (
+            <button
+              onClick={cancelImport}
+              className="px-4 py-2.5 rounded-xl font-semibold text-sm bg-white text-red-600 border border-red-200 hover:bg-red-50 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+
+        {error && <div className="mt-3 text-sm text-red-600">{error}</div>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-50 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-800 text-sm">Import History</h3>
+          <span className="text-xs text-gray-400">Last 20 runs</span>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-gray-400 text-sm">Loading…</div>
+        ) : logs.length === 0 ? (
+          <div className="p-8 text-center text-gray-400 text-sm">No imports run yet.</div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {logs.map((log) => {
+              const errors = log.errors ? (JSON.parse(log.errors) as { id: number; error: string }[]) : [];
+              const pct = log.total ? Math.round((100 * (log.uploaded ?? 0)) / log.total) : 0;
+              return (
+                <div key={log.id} className="px-5 py-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        log.status === "ok"
+                          ? "bg-green-100 text-green-700"
+                          : log.status === "running"
+                          ? "bg-yellow-100 text-yellow-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {log.status === "ok" ? "Success" : log.status === "running" ? "Running…" : "Failed"}
+                    </span>
+                    <span className="text-sm text-gray-700">{new Date(log.ran_at + "Z").toLocaleString()}</span>
+                    {log.duration_ms != null && (
+                      <span className="text-xs text-gray-400">{fmt(log.duration_ms)}</span>
+                    )}
+                    {log.folder_path && (
+                      <span className="text-xs text-gray-400 font-mono">{log.folder_path}</span>
+                    )}
+                  </div>
+
+                  {log.total != null && (
+                    <>
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-2">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            log.status === "running" ? "bg-yellow-400" : "bg-crimson"
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                        <span>
+                          <span className="font-semibold text-gray-900">{log.uploaded ?? 0}</span> /{" "}
+                          {log.total} uploaded
+                        </span>
+                        {!!log.skipped && <span>{log.skipped} students without a photo</span>}
+                        {!!log.failed && <span className="text-red-600">{log.failed} failed</span>}
+                      </div>
+                    </>
+                  )}
+
+                  {log.error_message && (
+                    <div className="mt-2 text-xs text-red-600">{log.error_message}</div>
+                  )}
+                  {errors.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="text-xs text-gray-500 cursor-pointer">
+                        Show {errors.length} failure{errors.length === 1 ? "" : "s"}
+                      </summary>
+                      <ul className="mt-1 space-y-0.5">
+                        {errors.map((e, i) => (
+                          <li key={i} className="text-xs text-gray-500 font-mono">
+                            {e.id}: {e.error}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -2348,6 +2625,7 @@ export default function AdminDashboard() {
     { to: "/admin/classes", label: "Classes" },
     { to: "/admin/data", label: "Import Data" },
     { to: "/admin/sync", label: "Veracross Sync" },
+    { to: "/admin/photos", label: "Photos" },
   ];
 
   return (
@@ -2388,6 +2666,7 @@ export default function AdminDashboard() {
           <Route path="/classes/:classId" element={<AdminClassDetailPage />} />
           <Route path="/data" element={<AdminDataGrid />} />
           <Route path="/sync" element={<SyncPage />} />
+          <Route path="/photos" element={<PhotoImportPage />} />
           <Route path="*" element={<Navigate to="/admin" replace />} />
         </Routes>
       </div>

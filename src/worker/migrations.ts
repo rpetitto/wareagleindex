@@ -1,5 +1,26 @@
 import { migrate, db } from "flingit";
 
+migrate("010_photo_import_logs", async () => {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS photo_import_logs (
+      id TEXT PRIMARY KEY,
+      run_id TEXT,
+      ran_at TEXT DEFAULT (datetime('now')),
+      status TEXT NOT NULL,
+      folder_id TEXT,
+      folder_path TEXT,
+      students INTEGER,
+      total INTEGER,
+      uploaded INTEGER DEFAULT 0,
+      skipped INTEGER DEFAULT 0,
+      failed INTEGER DEFAULT 0,
+      errors TEXT,
+      error_message TEXT,
+      duration_ms INTEGER
+    )
+  `).run();
+});
+
 migrate("009_clear_google_photos", async () => {
   await db.prepare(`UPDATE users SET picture = NULL WHERE picture LIKE '%googleusercontent.com%'`).run();
 });
